@@ -127,8 +127,8 @@ function actionUrl(restaurant, action) {
   const encodedAddress = encodeURIComponent(`${restaurant.name}, ${restaurant.address}, São José do Rio Preto SP`);
   if (action === 'maps') return `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
   if (action === 'instagram') return `https://instagram.com/${restaurant.instagram.replace('@', '')}`;
-  if (action === 'reserve') return `https://wa.me/${phoneDigits(restaurant.phone)}?text=${encodeURIComponent(`Olá, vim pelo Mesa Boa e quero reservar uma mesa no ${restaurant.name}.`)}`;
-  return `https://wa.me/${phoneDigits(restaurant.phone)}?text=${encodeURIComponent(`Olá, encontrei o ${restaurant.name} no Mesa Boa. Gostaria de mais informações.`)}`;
+  if (action === 'reserve') return `https://wa.me/${phoneDigits(restaurant.phone)}?text=${encodeURIComponent(`Olá, vim pelo REST Rio Preto e quero reservar uma mesa no ${restaurant.name}.`)}`;
+  return `https://wa.me/${phoneDigits(restaurant.phone)}?text=${encodeURIComponent(`Olá, encontrei o ${restaurant.name} no REST Rio Preto. Gostaria de mais informações.`)}`;
 }
 function openRestaurantAction(id, action) {
   const restaurant = byId(id);
@@ -153,7 +153,7 @@ function cardTemplate(restaurant, mode = 'grid') {
     return `
       <article class="restaurant-card home-restaurant-card">
         <div class="image-wrap">
-          <img src="${restaurant.image}" alt="${restaurant.name}">
+          <img src="${restaurant.image}" alt="${restaurant.name}" loading="lazy" decoding="async">
           <span class="score">${score(restaurant.score)}</span>
           <button class="save-button" data-favorite="${restaurant.id}" aria-label="Salvar restaurante" type="button">${icons.heart}</button>
         </div>
@@ -169,7 +169,7 @@ function cardTemplate(restaurant, mode = 'grid') {
   return `
     <article class="restaurant-card">
       <div class="image-wrap">
-        <img src="${restaurant.image}" alt="${restaurant.name}">
+        <img src="${restaurant.image}" alt="${restaurant.name}" loading="lazy" decoding="async">
         <span class="open-badge ${restaurant.open ? 'is-open' : ''}">${restaurant.open ? 'Aberto agora' : 'Fechado'}</span>
         <button class="save-button" data-favorite="${restaurant.id}" aria-label="Salvar restaurante" type="button">${icons.heart}</button>
       </div>
@@ -194,7 +194,7 @@ function cardTemplate(restaurant, mode = 'grid') {
 function miniTemplate(restaurant) {
   return `
     <button class="mini-item" data-detail="${restaurant.id}" type="button">
-      <img src="${restaurant.image}" alt="${restaurant.name}">
+      <img src="${restaurant.image}" alt="${restaurant.name}" loading="lazy" decoding="async">
       <span><strong>${restaurant.name}</strong><small>${restaurant.type} · ${restaurant.district}</small></span>
       <span class="score">${score(restaurant.score)}</span>
     </button>
@@ -204,7 +204,15 @@ function miniTemplate(restaurant) {
 function setPage(pageId) {
   document.body.dataset.page = pageId;
   document.querySelectorAll('.page').forEach((page) => page.classList.toggle('active', page.id === pageId));
-  document.querySelectorAll('.nav-link, .bottom-link').forEach((button) => button.classList.toggle('active', button.dataset.page === pageId));
+  document.querySelectorAll('.nav-link, .bottom-link').forEach((button) => {
+    const isActive = button.dataset.page === pageId;
+    button.classList.toggle('active', isActive);
+    if (isActive) {
+      button.setAttribute('aria-current', 'page');
+    } else {
+      button.removeAttribute('aria-current');
+    }
+  });
   document.body.classList.remove('menu-open');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -536,3 +544,4 @@ renderList();
 renderRankings();
 renderFavorites();
 bindEvents();
+setPage('home');
