@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mesa Boa Rio Preto</title>
+  <title>REST Rio Preto</title>
   <link rel="preconnect" href="https://images.unsplash.com">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -12,10 +12,10 @@
     <button class="icon-button menu-button" id="menuButton" aria-label="Abrir menu" type="button">
       <span data-icon="menu"></span>
     </button>
-    <button class="brand" data-page="home" type="button" aria-label="Mesa Boa Rio Preto">
-      <span class="brand-symbol">MB</span>
+    <button class="brand" data-page="home" type="button" aria-label="REST Rio Preto">
+      <span class="brand-symbol">R</span>
       <span class="brand-copy">
-        <strong>Mesa Boa</strong>
+        <strong>REST</strong>
         <small>Rio Preto</small>
       </span>
     </button>
@@ -50,9 +50,9 @@
             <span>Boa noite, Felipe</span>
             <strong>São José do Rio Preto</strong>
           </div>
-          <button class="home-logo" data-page="home" type="button" aria-label="Mesa Boa Rio Preto">
-            <span>MB</span>
-            <strong>Mesa Boa</strong>
+          <button class="home-logo" data-page="home" type="button" aria-label="REST Rio Preto">
+            <span>R</span>
+            <strong>REST</strong>
             <small>Rio Preto</small>
           </button>
           <button class="icon-button bell-button" type="button" aria-label="Notificações">
@@ -69,9 +69,10 @@
           </div>
         </div>
         <div class="home-intro">
-          <div>
-            <h1>Encontre os melhores restaurantes de São José do Rio Preto</h1>
-            <p>Veja rankings, avaliações reais, faixa de preço e recomendações para escolher onde comer hoje.</p>
+          <div class="home-copy">
+            <h1>Descubra experiências incríveis à mesa.</h1>
+            <p>Ranking confiável, avaliações reais e recomendações selecionadas para você comer bem hoje.</p>
+            <button class="hero-cta" data-page="list" type="button">Explorar agora</button>
           </div>
           <figure>
             <img src="https://images.unsplash.com/photo-1559339352-11d035aa65de?auto=format&fit=crop&w=900&q=85" alt="Mesa elegante em restaurante">
@@ -149,7 +150,7 @@
 
     <section class="page" id="list">
       <div class="app-page-title centered-brand">
-        <span class="brand-mini">Mesa Boa Rio Preto</span>
+        <span class="brand-mini">REST Rio Preto</span>
         <h1>Restaurantes em Rio Preto</h1>
         <div class="search-card page-search">
           <span data-icon="search"></span>
@@ -185,12 +186,32 @@
     </section>
 
     <section class="page" id="review">
-      <div class="review-layout">
-        <div class="app-page-title">
+      <div class="profile-screen">
+        <section class="profile-hero">
+          <div class="profile-avatar">FE</div>
+          <div>
+            <span class="kicker">Perfil REST</span>
+            <h1>Felipe Esteves</h1>
+            <p>São José do Rio Preto · Explorador gastronômico</p>
+            <div class="profile-inline-actions">
+              <button data-page="favorites" type="button">Salvos</button>
+              <button data-page="rankings" type="button">Rankings</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="profile-stats" aria-label="Resumo do perfil">
+          <article><strong>12</strong><span>Avaliações</span></article>
+          <article><strong>8</strong><span>Favoritos</span></article>
+          <article><strong>4</strong><span>Rankings</span></article>
+        </section>
+
+        <div class="profile-form-heading">
           <span class="kicker">Avaliação verificada</span>
-          <h1>Avalie um restaurante</h1>
+          <h2>Avaliar restaurante</h2>
           <p>Sua opinião ajuda Rio Preto a escolher melhor onde comer hoje.</p>
         </div>
+
         <form class="review-form" id="reviewForm">
           <label>Restaurante<select id="reviewRestaurant" required></select></label>
           <div class="review-trust-grid">
@@ -240,7 +261,7 @@
     <section class="page" id="restaurantPanel">
       <div class="dashboard-shell">
         <aside class="dashboard-sidebar">
-          <div class="dashboard-logo">Mesa Boa<br><span>Rio Preto</span></div>
+          <div class="dashboard-logo">REST<br><span>Rio Preto</span></div>
           <button class="active" type="button">Painel do restaurante</button>
           <button type="button">Editar perfil</button>
           <button type="button">Cardápio</button>
@@ -286,7 +307,7 @@
     <section class="page" id="adminPanel">
       <div class="dashboard-shell">
         <aside class="dashboard-sidebar">
-          <div class="dashboard-logo">Mesa Boa<br><span>Admin geral</span></div>
+          <div class="dashboard-logo">REST<br><span>Admin geral</span></div>
           <button class="active" type="button">Admin geral</button>
           <button type="button">Aprovar avaliações</button>
           <button type="button">Criar rankings</button>
