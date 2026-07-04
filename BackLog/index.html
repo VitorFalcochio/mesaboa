@@ -1,12 +1,24 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
+
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#06140f">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="REST Rio Preto">
+  <meta name="application-name" content="REST Rio Preto">
+  <meta name="format-detection" content="telephone=no">
   <title>REST Rio Preto</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="app-icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="app-icon.svg">
   <link rel="preconnect" href="https://images.unsplash.com">
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
   <header class="app-header">
     <button class="icon-button menu-button" id="menuButton" aria-label="Abrir menu" type="button">
@@ -68,17 +80,6 @@
             </button>
           </div>
         </div>
-        <div class="home-intro">
-          <div class="home-copy">
-            <h1>Descubra experiências incríveis à mesa.</h1>
-            <p>Ranking confiável, avaliações reais e recomendações selecionadas para você comer bem hoje.</p>
-            <button class="hero-cta" data-page="list" type="button">Explorar agora</button>
-          </div>
-          <figure>
-            <img src="https://images.unsplash.com/photo-1559339352-11d035aa65de?auto=format&fit=crop&w=900&q=85" alt="Mesa elegante em restaurante">
-            <figcaption><span></span><span></span><span></span><span></span></figcaption>
-          </figure>
-        </div>
       </section>
 
       <section class="section-block category-section">
@@ -107,22 +108,26 @@
 
       <section class="moment-grid">
         <button class="moment-card" data-moment="Em alta" type="button">
-          <img src="https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=600&q=80" alt="Restaurante em alta">
+          <img src="https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=600&q=80"
+            alt="Restaurante em alta">
           <span data-icon="trend"></span>
           <strong>Em alta</strong>
         </button>
         <button class="moment-card" data-moment="Bom para casal" type="button">
-          <img src="https://images.unsplash.com/photo-1529511582893-2d7e684dd128?auto=format&fit=crop&w=600&q=80" alt="Jantar romântico">
+          <img src="https://images.unsplash.com/photo-1529511582893-2d7e684dd128?auto=format&fit=crop&w=600&q=80"
+            alt="Jantar romântico">
           <span data-icon="heart"></span>
           <strong>Românticos</strong>
         </button>
         <button class="moment-card" data-moment="Custo-benefício" type="button">
-          <img src="https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=600&q=80" alt="Prato bem servido">
+          <img src="https://images.unsplash.com/photo-1540189549336-e6e99c3679fe?auto=format&fit=crop&w=600&q=80"
+            alt="Prato bem servido">
           <span data-icon="coin"></span>
           <strong>Bom custo</strong>
         </button>
         <button class="moment-card" data-moment="Aberto agora" type="button">
-          <img src="https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=600&q=80" alt="Restaurante aberto">
+          <img src="https://images.unsplash.com/photo-1514933651103-005eec06c04b?auto=format&fit=crop&w=600&q=80"
+            alt="Restaurante aberto">
           <span data-icon="clock"></span>
           <strong>Aberto agora</strong>
         </button>
@@ -130,19 +135,27 @@
 
       <section class="home-lists">
         <div class="section-block compact">
-          <div class="section-title compact"><h2>Em alta essa semana</h2></div>
+          <div class="section-title compact">
+            <h2>Em alta essa semana</h2>
+          </div>
           <div class="mini-list" id="trendingList"></div>
         </div>
         <div class="section-block compact">
-          <div class="section-title compact"><h2>Bom para casal</h2></div>
+          <div class="section-title compact">
+            <h2>Bom para casal</h2>
+          </div>
           <div class="mini-list" id="coupleList"></div>
         </div>
         <div class="section-block compact">
-          <div class="section-title compact"><h2>Custo-benefício</h2></div>
+          <div class="section-title compact">
+            <h2>Custo-benefício</h2>
+          </div>
           <div class="mini-list" id="valueList"></div>
         </div>
         <div class="section-block compact">
-          <div class="section-title compact"><h2>Aberto agora</h2></div>
+          <div class="section-title compact">
+            <h2>Aberto agora</h2>
+          </div>
           <div class="mini-list" id="openList"></div>
         </div>
       </section>
@@ -160,11 +173,27 @@
 
       <div class="filter-strip">
         <button class="filter-pill primary-filter" type="button"><span data-icon="fork"></span>Tipo de comida</button>
-        <label class="filter-pill">Nota mínima<select id="scoreFilter"><option value="0">Todas</option><option value="8.5">8,5+</option><option value="9">9,0+</option><option value="9.3">9,3+</option></select></label>
-        <label class="filter-pill">Preço<select id="priceFilter"><option value="">Todos</option><option>$</option><option>$$</option><option>$$$</option><option>$$$$</option></select></label>
-        <label class="filter-pill">Tipo<select id="typeFilter"><option value="">Todos</option></select></label>
-        <label class="filter-pill">Bairro<select id="districtFilter"><option value="">Todos</option></select></label>
-        <button class="filter-pill icon-only" id="clearFilters" aria-label="Limpar filtros" type="button"><span data-icon="sliders"></span></button>
+        <label class="filter-pill">Nota mínima<select id="scoreFilter">
+            <option value="0">Todas</option>
+            <option value="8.5">8,5+</option>
+            <option value="9">9,0+</option>
+            <option value="9.3">9,3+</option>
+          </select></label>
+        <label class="filter-pill">Preço<select id="priceFilter">
+            <option value="">Todos</option>
+            <option>$</option>
+            <option>$$</option>
+            <option>$$$</option>
+            <option>$$$$</option>
+          </select></label>
+        <label class="filter-pill">Tipo<select id="typeFilter">
+            <option value="">Todos</option>
+          </select></label>
+        <label class="filter-pill">Bairro<select id="districtFilter">
+            <option value="">Todos</option>
+          </select></label>
+        <button class="filter-pill icon-only" id="clearFilters" aria-label="Limpar filtros" type="button"><span
+            data-icon="sliders"></span></button>
       </div>
       <div class="tag-filter-row" id="tagFilters"></div>
       <div class="result-bar"><strong id="resultCount"></strong></div>
@@ -225,7 +254,8 @@
             <label>Preço<input type="range" name="priceScore" min="0" max="10" step="0.1" value="8.5"></label>
             <label>Experiência<input type="range" name="experience" min="0" max="10" step="0.1" value="9"></label>
           </div>
-          <label>Comentário<textarea name="comment" rows="4" placeholder="Conte como foi a experiência"></textarea></label>
+          <label>Comentário<textarea name="comment" rows="4"
+              placeholder="Conte como foi a experiência"></textarea></label>
           <label>Foto do prato ou ambiente<input type="file" accept="image/*"></label>
           <label class="checkbox-line"><input type="checkbox" required>Eu realmente visitei este restaurante</label>
           <div class="trust-note">
@@ -244,15 +274,21 @@
       </div>
       <div class="home-lists three">
         <section class="section-block compact">
-          <div class="section-title compact"><h2>Restaurantes salvos</h2></div>
+          <div class="section-title compact">
+            <h2>Restaurantes salvos</h2>
+          </div>
           <div class="mini-list" id="favoriteList"></div>
         </section>
         <section class="section-block compact">
-          <div class="section-title compact"><h2>Últimos visualizados</h2></div>
+          <div class="section-title compact">
+            <h2>Últimos visualizados</h2>
+          </div>
           <div class="mini-list" id="recentList"></div>
         </section>
         <section class="section-block compact">
-          <div class="section-title compact"><h2>Quero conhecer</h2></div>
+          <div class="section-title compact">
+            <h2>Quero conhecer</h2>
+          </div>
           <div class="mini-list" id="wishList"></div>
         </section>
       </div>
@@ -270,7 +306,9 @@
           <button type="button">Avaliações</button>
         </aside>
         <div class="dashboard-content">
-          <div class="dashboard-head"><h1>Painel do restaurante</h1><button class="solid-button" type="button">Ver perfil</button></div>
+          <div class="dashboard-head">
+            <h1>Painel do restaurante</h1><button class="solid-button" type="button">Ver perfil</button>
+          </div>
           <div class="metric-grid">
             <article><span data-icon="eye"></span><strong>12.458</strong><small>Visualizações</small></article>
             <article><span data-icon="phone"></span><strong>1.287</strong><small>Cliques no WhatsApp</small></article>
@@ -281,18 +319,25 @@
             <form class="admin-form" id="ownerForm">
               <h2>Editar perfil</h2>
               <label>Nome do restaurante<input value="Brasa Alta Prime"></label>
-              <label>Descrição<textarea rows="3">Casa de carnes premium com salão elegante e carta de vinhos.</textarea></label>
+              <label>Descrição<textarea
+                  rows="3">Casa de carnes premium com salão elegante e carta de vinhos.</textarea></label>
               <label>Endereço<input value="Av. Alberto Andaló, 3120"></label>
               <label>WhatsApp<input value="(17) 98888-1010"></label>
               <label>Instagram<input value="@brasaaltaprime"></label>
               <label>Horário<input value="Ter a dom, 11h30 às 23h"></label>
               <label>Link de reserva<input value="https://wa.me/5517988881010"></label>
-              <label>Destaque da semana<select><option>Casa recomendada</option><option>Prato em destaque</option><option>Promoção de almoço</option></select></label>
+              <label>Destaque da semana<select>
+                  <option>Casa recomendada</option>
+                  <option>Prato em destaque</option>
+                  <option>Promoção de almoço</option>
+                </select></label>
               <label>Fotos<input type="file" accept="image/*" multiple></label>
               <button class="solid-button" type="submit">Salvar alterações</button>
             </form>
             <section class="panel-card">
-              <div class="section-title compact"><h2>Pratos recomendados</h2><button class="ghost-button" type="button">Gerenciar</button></div>
+              <div class="section-title compact">
+                <h2>Pratos recomendados</h2><button class="ghost-button" type="button">Gerenciar</button>
+              </div>
               <div class="admin-list" id="ownerDishes"></div>
               <div class="owner-insights">
                 <strong>Oportunidade</strong>
@@ -315,7 +360,9 @@
           <button type="button">Categorias</button>
         </aside>
         <div class="dashboard-content">
-          <div class="dashboard-head"><h1>Operação do app</h1><button class="solid-button" type="button">Cadastrar restaurante</button></div>
+          <div class="dashboard-head">
+            <h1>Operação do app</h1><button class="solid-button" type="button">Cadastrar restaurante</button>
+          </div>
           <div class="metric-grid">
             <article><strong>20</strong><small>Restaurantes cadastrados</small></article>
             <article><strong>68.2k</strong><small>Acessos no mês</small></article>
@@ -324,15 +371,21 @@
           </div>
           <div class="dashboard-grid">
             <section class="panel-card">
-              <div class="section-title compact"><h2>Aprovar avaliações</h2><button class="ghost-button" type="button">Ver todas</button></div>
+              <div class="section-title compact">
+                <h2>Aprovar avaliações</h2><button class="ghost-button" type="button">Ver todas</button>
+              </div>
               <div class="admin-list" id="adminReviews"></div>
             </section>
             <section class="panel-card">
-              <div class="section-title compact"><h2>Restaurantes mais acessados</h2></div>
+              <div class="section-title compact">
+                <h2>Restaurantes mais acessados</h2>
+              </div>
               <div class="mini-list" id="adminPopular"></div>
             </section>
             <section class="panel-card admin-wide">
-              <div class="section-title compact"><h2>Curadoria local</h2><button class="ghost-button" type="button">Publicar destaque</button></div>
+              <div class="section-title compact">
+                <h2>Curadoria local</h2><button class="ghost-button" type="button">Publicar destaque</button>
+              </div>
               <div class="curation-grid" id="adminCuration"></div>
             </section>
           </div>
@@ -341,15 +394,21 @@
     </section>
   </main>
 
-  <nav class="bottom-nav" aria-label="Navegação inferior">
-    <button class="bottom-link active" data-page="home" type="button"><span data-icon="home"></span><small>Início</small></button>
-    <button class="bottom-link" data-page="list" type="button"><span data-icon="search"></span><small>Explorar</small></button>
-    <button class="bottom-link" data-page="rankings" type="button"><span data-icon="calendar"></span><small>Rankings</small></button>
-    <button class="bottom-link" data-page="favorites" type="button"><span data-icon="heart"></span><small>Salvos</small></button>
-    <button class="bottom-link" data-page="review" type="button"><span data-icon="user"></span><small>Perfil</small></button>
+  <nav class="bottom-nav app-tabbar" aria-label="Navegação inferior">
+    <button class="bottom-link active" data-page="home" type="button"><span
+        data-icon="home"></span><small>Início</small></button>
+    <button class="bottom-link" data-page="list" type="button"><span
+        data-icon="search"></span><small>Explorar</small></button>
+    <button class="bottom-link" data-page="rankings" type="button"><span
+        data-icon="calendar"></span><small>Rankings</small></button>
+    <button class="bottom-link" data-page="favorites" type="button"><span
+        data-icon="heart"></span><small>Salvos</small></button>
+    <button class="bottom-link" data-page="review" type="button"><span
+        data-icon="user"></span><small>Perfil</small></button>
   </nav>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="script.js"></script>
 </body>
+
 </html>

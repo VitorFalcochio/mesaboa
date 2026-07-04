@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "Bocado Rio Preto",
+    "slug": "bocado-rio-preto",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#FFF8EE",
+    "scheme": "bocado",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.mesaboa.riopreto"
+    },
+    "android": {
+      "package": "com.mesaboa.riopreto",
+      "adaptiveIcon": {
+        "backgroundColor": "#06140f"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-asset",
+      "expo-font"
+    ]
+  }
+}
