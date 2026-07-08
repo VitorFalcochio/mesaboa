@@ -1,11 +1,12 @@
-const CACHE_NAME = 'rest-rio-preto-v1';
+const CACHE_NAME = 'yummi-v1';
 const APP_SHELL = [
   './',
   './index.html',
   './style.css',
   './script.js',
   './manifest.webmanifest',
-  './app-icon.svg'
+  './ícone.png',
+  './logo.png'
 ];
 
 self.addEventListener('install', (event) => {

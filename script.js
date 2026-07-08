@@ -127,8 +127,8 @@ function actionUrl(restaurant, action) {
   const encodedAddress = encodeURIComponent(`${restaurant.name}, ${restaurant.address}, São José do Rio Preto SP`);
   if (action === 'maps') return `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
   if (action === 'instagram') return `https://instagram.com/${restaurant.instagram.replace('@', '')}`;
-  if (action === 'reserve') return `https://wa.me/${phoneDigits(restaurant.phone)}?text=${encodeURIComponent(`Olá, vim pelo REST Rio Preto e quero reservar uma mesa no ${restaurant.name}.`)}`;
-  return `https://wa.me/${phoneDigits(restaurant.phone)}?text=${encodeURIComponent(`Olá, encontrei o ${restaurant.name} no REST Rio Preto. Gostaria de mais informações.`)}`;
+  if (action === 'reserve') return `https://wa.me/${phoneDigits(restaurant.phone)}?text=${encodeURIComponent(`Olá, vim pelo Yummi e quero reservar uma mesa no ${restaurant.name}.`)}`;
+  return `https://wa.me/${phoneDigits(restaurant.phone)}?text=${encodeURIComponent(`Olá, encontrei o ${restaurant.name} no Yummi. Gostaria de mais informações.`)}`;
 }
 function openRestaurantAction(id, action) {
   const restaurant = byId(id);
