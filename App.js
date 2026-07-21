@@ -293,8 +293,7 @@ const storageKeys = {
   favorites: 'mesaBoaFavoritesRN',
   users: 'mesaBoaUsersRN',
   currentUser: 'mesaBoaCurrentUserRN',
-  restaurantCoordinates: 'mesaBoaRestaurantCoordinatesRN',
-  introSeen: 'mesaBoaIntroSeenRN'
+  restaurantCoordinates: 'mesaBoaRestaurantCoordinatesRN'
 };
 const homeRestaurantSectionLimit = 15;
 const demoAccountEmail = 'vitorfalcochio@gmail.com';
@@ -1013,8 +1012,6 @@ export default function App() {
   const [editingRestaurant, setEditingRestaurant] = useState(null);
   const [selectedPanelPost, setSelectedPanelPost] = useState(null);
   const [panelPostLikes, setPanelPostLikes] = useState({});
-  const [showIntro, setShowIntro] = useState(false);
-  const [introStep, setIntroStep] = useState(0);
   const isAdmin = Boolean(currentUser?.email && isAdminEmail(currentUser.email));
   const appAppearance = useMemo(() => resolveAppearance(currentUser?.settings, systemColorScheme), [currentUser?.settings, systemColorScheme]);
   const copy = settingsCopy[currentUser?.settings?.language || 'pt-BR'] || settingsCopy['pt-BR'];
@@ -1115,7 +1112,6 @@ export default function App() {
           AsyncStorage.getItem(storageKeys.currentUser)
         ]);
         const storedRestaurantCoordinates = await AsyncStorage.getItem(storageKeys.restaurantCoordinates);
-        const introSeen = await AsyncStorage.getItem(storageKeys.introSeen);
         const localUser = storedCurrentUser ? normalizeDemoAccount(JSON.parse(storedCurrentUser)) : null;
 
         if (storedRestaurants) {
@@ -1136,8 +1132,12 @@ export default function App() {
           return [...list, { ...mergedUser, gamification: mergeGamification(mergedUser.gamification) }];
         }, []);
         setUsers(mergedUsers);
-        if (localUser) setCurrentUser(normalizeDemoAccount({ ...localUser, gamification: mergeGamification(localUser.gamification) }));
-        setShowIntro(!introSeen);
+        if (localUser) {
+          setCurrentUser(normalizeDemoAccount({ ...localUser, gamification: mergeGamification(localUser.gamification) }));
+        } else {
+          setAuthMode('login');
+          setForm({});
+        }
 
         if (supabaseReady) {
           await seedRestaurantsIfEmpty(seedRestaurants, seedRestaurantLegacyNames);
@@ -1669,26 +1669,6 @@ export default function App() {
     setActiveScreen(null);
   }
 
-  function finishIntro() {
-    AsyncStorage.setItem(storageKeys.introSeen, '1').catch(() => {});
-    setShowIntro(false);
-    setIntroStep(0);
-  }
-
-  function advanceIntro() {
-    if (introStep >= 2) {
-      finishIntro();
-      setAuthMode('signup');
-      setForm({});
-      return;
-    }
-    setIntroStep((step) => Math.min(2, step + 1));
-  }
-
-  function skipIntro() {
-    finishIntro();
-  }
-
   function selectArea(area) {
     setSelectedArea(area.name);
     setMapRegion(area.region);
@@ -1969,12 +1949,6 @@ export default function App() {
     });
   }
 
-  async function replayIntro() {
-    await AsyncStorage.removeItem(storageKeys.introSeen);
-    setIntroStep(0);
-    setShowIntro(true);
-  }
-
   async function withImageUploadFallback(uri, uploadTask) {
     if (!uri) return '';
     try {
@@ -2118,6 +2092,8 @@ export default function App() {
   async function logout() {
     setCurrentUser(null);
     await AsyncStorage.removeItem(storageKeys.currentUser);
+    setAuthMode('login');
+    setForm({});
   }
 
   function submitAuth() {
@@ -4047,7 +4023,6 @@ function postKey(restaurantId, postId) {
           <Text style={styles.panelText}>Restaurantes carregados: {restaurants.length}</Text>
         </View>
         <View style={styles.settingsList}>
-          <SettingsActionRow icon="play-circle-outline" title="Ver apresentacao de novo" subtitle="Reabrir os slides iniciais do aplicativo" onPress={replayIntro} />
           <SettingsActionRow icon="share-social-outline" title="Compartilhar Dine" subtitle="Enviar convite para outra pessoa" onPress={() => Share.share({ message: 'Conheca o Dine e descubra restaurantes perto de voce.' })} />
         </View>
       </View>
@@ -4854,23 +4829,13 @@ function postKey(restaurantId, postId) {
         onPickPhotos={pickFeedPhotos}
         onRemovePhoto={removeFeedPhoto}
       />
-      <IntroModal
-        visible={showIntro && hydrated && !showStartupSplash}
-        step={introStep}
-        onStepChange={setIntroStep}
-        onSkip={skipIntro}
-        onCreateAccount={() => {
-          finishIntro();
-          setAuthMode('signup');
-          setForm({});
-        }}
-      />
       <AuthModal
         mode={authMode}
         form={form}
         setForm={setForm}
         setMode={setAuthMode}
         onSubmitAuth={submitAuth}
+        required={!currentUser}
       />
       <StartupSplash
         visible={showStartupSplash}
@@ -5502,84 +5467,6 @@ function FeedProfileModal({ visible, profile, onClose, onOpenRestaurant, onRepor
   );
 }
 
-function IntroModal({ visible, step, onStepChange, onSkip, onCreateAccount }) {
-  const scrollRef = useRef(null);
-  const { width, height } = useWindowDimensions();
-  const slides = [
-    {
-      kicker: 'Bem-vindo',
-      title: 'O Dine te ajuda a descobrir onde comer melhor.',
-      text: 'Um app feito para encontrar restaurantes, salvar lugares e explorar a cena da sua cidade.'
-    },
-    {
-      kicker: 'Descubra',
-      title: 'Encontre os melhores restaurantes da sua cidade.',
-      text: 'Veja opções reais, com perfil, fotos, cardápio e recomendações para decidir com mais confiança.'
-    },
-    {
-      kicker: 'Comece agora',
-      title: 'Crie sua conta e monte seu roteiro.',
-      text: 'Salve favoritos, avalie experiências e deixe o app mais seu desde o primeiro uso.'
-    }
-  ];
-
-  useEffect(() => {
-    if (!visible) return;
-    scrollRef.current?.scrollTo({ x: step * width, animated: true });
-  }, [visible, step, width]);
-
-  if (!visible) return null;
-
-  return (
-    <Modal visible transparent presentationStyle="fullScreen" animationType="fade" onRequestClose={onSkip}>
-      <View style={styles.introBackdrop}>
-        <View style={styles.introSheet}>
-          <ScrollView
-            ref={scrollRef}
-            horizontal
-            pagingEnabled
-            showsHorizontalScrollIndicator={false}
-            onMomentumScrollEnd={(event) => {
-              const nextStep = Math.round(event.nativeEvent.contentOffset.x / width);
-              if (nextStep !== step) onStepChange(nextStep);
-            }}
-            scrollEventThrottle={16}
-          >
-            {slides.map((slide) => (
-              <View key={slide.kicker} style={[styles.introSlide, { width }]}>
-                <View style={styles.introSlideBody}>
-                  <Text style={styles.introKicker}>{slide.kicker}</Text>
-                  <Text style={styles.introTitle}>{slide.title}</Text>
-                  <Text style={styles.introText}>{slide.text}</Text>
-                </View>
-                <View style={styles.introIllustration}>
-                  <View style={styles.introCard}>
-                    <Ionicons name="restaurant-outline" size={42} color={colors.redDark} />
-                  </View>
-                </View>
-              </View>
-            ))}
-          </ScrollView>
-          <View style={styles.introFooter}>
-            <Pressable onPress={onSkip} hitSlop={10}>
-              <Text style={styles.introFooterLink}>Pular</Text>
-            </Pressable>
-            <View style={styles.introDots}>
-              {slides.map((slide, index) => (
-                <View key={slide.kicker} style={[styles.introDot, index === step && styles.introDotActive]} />
-              ))}
-            </View>
-            <Pressable onPress={step === slides.length - 1 ? onCreateAccount : () => onStepChange(step + 1)} style={styles.introCta}>
-              <Text style={styles.introCtaText}>{step === slides.length - 1 ? 'Criar conta' : 'Próximo'}</Text>
-              <Ionicons name={step === slides.length - 1 ? 'person-add-outline' : 'chevron-forward'} size={18} color={colors.card} />
-            </Pressable>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
 function SettingsActionRow({ icon, title, subtitle, onPress }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.settingsRow, pressed && styles.activePress]}>
@@ -5626,18 +5513,21 @@ function SettingsToggleRow({ icon, title, subtitle, active, onPress }) {
   );
 }
 
-function AuthModal({ mode, form, setForm, setMode, onSubmitAuth }) {
+function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, required = false }) {
   if (!mode) return null;
   const title = mode === 'login' ? 'Acesse sua conta' : mode === 'signup' ? 'Comece no Dine' : 'Cadastrar restaurante';
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={() => setMode(null)}>
+    <Modal visible transparent animationType="slide" onRequestClose={() => required ? null : setMode(null)}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBackdrop}>
         <ScrollView contentContainerStyle={styles.authSheet}>
-          <Pressable onPress={() => setMode(null)} style={styles.closeButton}>
-            <Ionicons name="close" size={22} color={colors.green} />
-          </Pressable>
+          {!required ? (
+            <Pressable onPress={() => setMode(null)} style={styles.closeButton}>
+              <Ionicons name="close" size={22} color={colors.green} />
+            </Pressable>
+          ) : null}
           <Text style={styles.kicker}>{mode === 'login' ? 'Entrar' : 'Criar conta'}</Text>
           <Text style={styles.pageTitleText}>{title}</Text>
+          {required ? <Text style={styles.panelText}>Entre ou crie uma conta para continuar no Dine.</Text> : null}
           {mode === 'signup' ? <Field label="Nome" value={form.name} onChangeText={(value) => setForm({ ...form, name: value })} /> : null}
           <Field label="E-mail" value={form.email} onChangeText={(value) => setForm({ ...form, email: value })} keyboardType="email-address" autoCapitalize="none" />
           <Field label="Senha" value={form.password} onChangeText={(value) => setForm({ ...form, password: value })} secureTextEntry />
@@ -6483,22 +6373,6 @@ Object.assign(styles, {
   postViewerChipText: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 12 },
   postViewerAction: { minHeight: 48, marginHorizontal: 14, marginBottom: 14, borderRadius: 14, backgroundColor: colors.redDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   postViewerActionText: { color: colors.card, fontFamily: bodyFont, fontSize: 14 },
-  introBackdrop: { flex: 1, backgroundColor: colors.bg },
-  introSheet: { flex: 1, overflow: 'hidden', backgroundColor: colors.bg },
-  introSlide: { flex: 1, justifyContent: 'space-between', paddingHorizontal: 22, paddingTop: Platform.OS === 'ios' ? 52 : 32, paddingBottom: 18, gap: 18 },
-  introSlideBody: { gap: 10 },
-  introKicker: { color: colors.redDark, fontFamily: bodyFont, fontSize: 12, textTransform: 'uppercase', letterSpacing: 1.2 },
-  introTitle: { color: colors.ink, fontFamily: titleFont, fontWeight: '900', fontSize: 30, lineHeight: 34 },
-  introText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 16, lineHeight: 23 },
-  introIllustration: { alignItems: 'center', justifyContent: 'center', flex: 1 },
-  introCard: { width: '100%', aspectRatio: 1.05, borderRadius: 24, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
-  introFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingHorizontal: 18, paddingVertical: 16, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: 'rgba(255,253,247,0.98)' },
-  introFooterLink: { color: colors.muted, fontFamily: bodyFont, fontSize: 13 },
-  introDots: { flexDirection: 'row', gap: 6, alignItems: 'center' },
-  introDot: { width: 7, height: 7, borderRadius: 99, backgroundColor: 'rgba(40,40,43,0.18)' },
-  introDotActive: { width: 18, backgroundColor: colors.redDark },
-  introCta: { minHeight: 42, paddingHorizontal: 14, borderRadius: 21, backgroundColor: colors.redDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  introCtaText: { color: colors.card, fontFamily: bodyFont, fontSize: 13 },
   pagePanel: { gap: 12, borderRadius: 18, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, padding: 16, marginBottom: 14 },
   panelTitle: { color: colors.ink, fontFamily: titleFont, fontWeight: '900', fontSize: 22 },
   panelText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 14, lineHeight: 20 },
