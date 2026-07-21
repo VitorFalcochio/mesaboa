@@ -281,6 +281,23 @@ const titleFont = Platform.select({ ios: 'Georgia', android: 'serif', default: '
 const bodyFont = 'Nunito_700Bold';
 
 const dineLogo = require('./Designer/Logos/2.png');
+const onboardingSlides = [
+  {
+    title: 'Descubra lugares perto de voce',
+    text: 'Encontre restaurantes, lanches e experiencias que combinam com seu momento.',
+    image: require('./assets/onboarding/order-food.svg')
+  },
+  {
+    title: 'Escolha sem complicacao',
+    text: 'Veja detalhes, salve favoritos e abra caminhos rapidos para pedir ou visitar.',
+    image: require('./assets/onboarding/hamburger.svg')
+  },
+  {
+    title: 'Gerencie tudo em um perfil',
+    text: 'Entre para cuidar dos seus favoritos, avaliacoes e restaurantes cadastrados.',
+    image: require('./assets/onboarding/eating-together.svg')
+  }
+];
 function imageSource(value, fallback = defaultImage) {
   return typeof value === 'string' ? { uri: value || fallback } : value || { uri: fallback };
 }
@@ -293,7 +310,8 @@ const storageKeys = {
   favorites: 'mesaBoaFavoritesRN',
   users: 'mesaBoaUsersRN',
   currentUser: 'mesaBoaCurrentUserRN',
-  restaurantCoordinates: 'mesaBoaRestaurantCoordinatesRN'
+  restaurantCoordinates: 'mesaBoaRestaurantCoordinatesRN',
+  onboardingSeen: 'dineOnboardingSeenRN'
 };
 const homeRestaurantSectionLimit = 15;
 const demoAccountEmail = 'vitorfalcochio@gmail.com';
@@ -1029,6 +1047,8 @@ export default function App() {
   const [profileDraft, setProfileDraft] = useState({ name: '', bio: '', location: '', preferences: '' });
   const [homeDiscoveryIndex, setHomeDiscoveryIndex] = useState(0);
   const [showStartupSplash, setShowStartupSplash] = useState(true);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingIndex, setOnboardingIndex] = useState(0);
 
   useEffect(() => {
     screenFade.setValue(0);
@@ -1105,11 +1125,12 @@ export default function App() {
   useEffect(() => {
     async function load() {
       try {
-        const [storedRestaurants, storedFavorites, storedUsers, storedCurrentUser] = await Promise.all([
+        const [storedRestaurants, storedFavorites, storedUsers, storedCurrentUser, storedOnboardingSeen] = await Promise.all([
           AsyncStorage.getItem(storageKeys.restaurants),
           AsyncStorage.getItem(storageKeys.favorites),
           AsyncStorage.getItem(storageKeys.users),
-          AsyncStorage.getItem(storageKeys.currentUser)
+          AsyncStorage.getItem(storageKeys.currentUser),
+          AsyncStorage.getItem(storageKeys.onboardingSeen)
         ]);
         const storedRestaurantCoordinates = await AsyncStorage.getItem(storageKeys.restaurantCoordinates);
         const localUser = storedCurrentUser ? normalizeDemoAccount(JSON.parse(storedCurrentUser)) : null;
@@ -1134,8 +1155,12 @@ export default function App() {
         setUsers(mergedUsers);
         if (localUser) {
           setCurrentUser(normalizeDemoAccount({ ...localUser, gamification: mergeGamification(localUser.gamification) }));
-        } else {
+        } else if (storedOnboardingSeen) {
           setAuthMode('login');
+          setForm({});
+        } else {
+          setShowOnboarding(true);
+          setAuthMode(null);
           setForm({});
         }
 
@@ -2094,6 +2119,22 @@ export default function App() {
     await AsyncStorage.removeItem(storageKeys.currentUser);
     setAuthMode('login');
     setForm({});
+  }
+
+  async function finishOnboarding() {
+    setShowOnboarding(false);
+    setOnboardingIndex(0);
+    await AsyncStorage.setItem(storageKeys.onboardingSeen, 'true');
+    setAuthMode('login');
+    setForm({});
+  }
+
+  function advanceOnboarding() {
+    if (onboardingIndex >= onboardingSlides.length - 1) {
+      finishOnboarding();
+      return;
+    }
+    setOnboardingIndex((index) => index + 1);
   }
 
   function submitAuth() {
@@ -4837,6 +4878,13 @@ function postKey(restaurantId, postId) {
         onSubmitAuth={submitAuth}
         required={!currentUser}
       />
+      <OnboardingModal
+        visible={showOnboarding && !currentUser}
+        slides={onboardingSlides}
+        index={onboardingIndex}
+        onNext={advanceOnboarding}
+        onSkip={finishOnboarding}
+      />
       <StartupSplash
         visible={showStartupSplash}
         opacity={startupSplashOpacity}
@@ -5513,9 +5561,64 @@ function SettingsToggleRow({ icon, title, subtitle, active, onPress }) {
   );
 }
 
+function OnboardingModal({ visible, slides, index, onNext, onSkip }) {
+  if (!visible) return null;
+  const slide = slides[index] || slides[0];
+  const last = index >= slides.length - 1;
+  return (
+    <Modal visible animationType="fade" presentationStyle="fullScreen" onRequestClose={() => null}>
+      <SafeAreaView style={styles.onboardingScreen}>
+        <View style={styles.onboardingTopBar}>
+          <View style={styles.onboardingBrand}>
+            <Image source={dineLogo} style={styles.onboardingLogo} resizeMode="contain" />
+          </View>
+          <Pressable onPress={onSkip} style={styles.onboardingSkip}>
+            <Text style={styles.onboardingSkipText}>Pular</Text>
+          </Pressable>
+        </View>
+        <View style={styles.onboardingArtworkWrap}>
+          <Image source={slide.image} style={styles.onboardingArtwork} resizeMode="contain" />
+        </View>
+        <View style={styles.onboardingCopy}>
+          <View style={styles.onboardingDots}>
+            {slides.map((item, dotIndex) => (
+              <View key={item.title} style={[styles.onboardingDot, dotIndex === index && styles.onboardingDotActive]} />
+            ))}
+          </View>
+          <Text style={styles.onboardingTitle}>{slide.title}</Text>
+          <Text style={styles.onboardingText}>{slide.text}</Text>
+          <AppButton onPress={onNext}>{last ? 'Comecar' : 'Continuar'}</AppButton>
+        </View>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
 function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, required = false }) {
   if (!mode) return null;
   const title = mode === 'login' ? 'Acesse sua conta' : mode === 'signup' ? 'Comece no Dine' : 'Cadastrar restaurante';
+  if (required) {
+    return (
+      <Modal visible animationType="fade" presentationStyle="fullScreen" onRequestClose={() => null}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.authFullBackdrop}>
+          <ScrollView contentContainerStyle={styles.authFullScreen} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <View style={styles.authFullForm}>
+              <Text style={styles.kicker}>{mode === 'login' ? 'Entrar' : 'Criar conta'}</Text>
+              <Text style={styles.pageTitleText}>{title}</Text>
+              <Text style={styles.panelText}>Entre ou crie uma conta para continuar.</Text>
+              {mode === 'signup' ? <Field label="Nome" value={form.name} onChangeText={(value) => setForm({ ...form, name: value })} /> : null}
+              <Field label="E-mail" value={form.email} onChangeText={(value) => setForm({ ...form, email: value })} keyboardType="email-address" autoCapitalize="none" />
+              <Field label="Senha" value={form.password} onChangeText={(value) => setForm({ ...form, password: value })} secureTextEntry />
+              <AppButton onPress={onSubmitAuth}>{mode === 'login' ? 'Entrar' : 'Criar conta'}</AppButton>
+              <AppButton kind="secondary" onPress={() => setMode(mode === 'login' ? 'signup' : 'login')}>
+                {mode === 'login' ? 'Criar nova conta' : 'Já tenho conta'}
+              </AppButton>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  }
   return (
     <Modal visible transparent animationType="slide" onRequestClose={() => required ? null : setMode(null)}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBackdrop}>
@@ -5557,6 +5660,20 @@ const styles = StyleSheet.create({
   startupLogoCard: { width: 228, height: 116, alignItems: 'center', justifyContent: 'center' },
   startupLogoImage: { width: 228, height: 116 },
   startupText: { marginTop: 12, color: colors.redDark, fontFamily: bodyFont, fontSize: 12, textTransform: 'uppercase', letterSpacing: 1.6 },
+  onboardingScreen: { flex: 1, backgroundColor: colors.bg, paddingHorizontal: 22, paddingBottom: 28 },
+  onboardingTopBar: { minHeight: 64, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 8 },
+  onboardingBrand: { width: 78, height: 40, alignItems: 'flex-start', justifyContent: 'center' },
+  onboardingLogo: { width: 72, height: 38 },
+  onboardingSkip: { minHeight: 38, paddingHorizontal: 14, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  onboardingSkipText: { color: colors.muted, fontFamily: bodyFont, fontSize: 14 },
+  onboardingArtworkWrap: { flex: 1, minHeight: 250, alignItems: 'center', justifyContent: 'center', paddingVertical: 14 },
+  onboardingArtwork: { width: '100%', height: '100%', maxWidth: 360, maxHeight: 330 },
+  onboardingCopy: { width: '100%', maxWidth: 360, alignSelf: 'center', alignItems: 'center', paddingBottom: 4, gap: 16 },
+  onboardingDots: { height: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  onboardingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(40,40,43,0.18)' },
+  onboardingDotActive: { width: 24, backgroundColor: colors.redDark },
+  onboardingTitle: { width: '100%', color: colors.ink, fontFamily: titleFont, fontWeight: '900', fontSize: 29, lineHeight: 34, textAlign: 'center' },
+  onboardingText: { width: '100%', color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 15, lineHeight: 22, textAlign: 'center', marginBottom: 2 },
   screen: { flex: 1, backgroundColor: colors.bg },
   screenContent: { paddingHorizontal: 18, paddingBottom: 112 },
   header: { paddingTop: 4, paddingBottom: 12, backgroundColor: 'rgba(248,247,243,0.96)' },
@@ -6562,6 +6679,9 @@ Object.assign(styles, {
   settingsToggleThumbActive: { transform: [{ translateX: 20 }] },
   optionRadio: { width: 30, height: 30, borderRadius: 15, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' },
   optionRadioActive: { backgroundColor: colors.redDark, borderColor: colors.redDark },
+  authFullBackdrop: { flex: 1, backgroundColor: colors.bg },
+  authFullScreen: { minHeight: '100%', paddingHorizontal: 20, paddingTop: Platform.OS === 'ios' ? 68 : 44, paddingBottom: 28, justifyContent: 'center', backgroundColor: colors.bg },
+  authFullForm: { width: '100%', gap: 12, paddingBottom: 8 },
   settingsDangerZone: { marginTop: 2, marginBottom: 20 },
   settingsLogoutButton: { minHeight: 50, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(200,70,37,0.28)', backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   settingsLogoutText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 14 }
