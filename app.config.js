@@ -10,13 +10,20 @@ module.exports = ({ config }) => {
         {
           locationWhenInUsePermission: 'Permita que o Dine use sua localização para mostrar restaurantes próximos.'
         }
+      ],
+      [
+        'expo-image-picker',
+        {
+          photosPermission: 'Permita que o Dine acesse suas fotos para publicar experiências no feed.'
+        }
       ]
     ],
     ios: {
       ...config.ios,
       infoPlist: {
         ...config.ios?.infoPlist,
-        NSLocationWhenInUseUsageDescription: 'Permita que o Dine use sua localização para mostrar restaurantes próximos.'
+        NSLocationWhenInUseUsageDescription: 'Permita que o Dine use sua localização para mostrar restaurantes próximos.',
+        NSPhotoLibraryUsageDescription: 'Permita que o Dine acesse suas fotos para publicar experiências no feed.'
       }
     },
     android: {

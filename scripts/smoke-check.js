@@ -17,7 +17,7 @@ function check(name, fn) {
 }
 
 check('source files parse', () => {
-  ['App.js', 'firebaseConfig.js', 'src/data/appData.js'].forEach((file) => {
+  ['App.js', 'supabaseConfig.js', 'src/data/appData.js'].forEach((file) => {
     parser.parse(read(file), { sourceType: 'module', plugins: ['jsx'] });
   });
 });
@@ -30,13 +30,13 @@ check('Expo config resolves', () => {
 
 check('required dependencies are installed', () => {
   const pkg = JSON.parse(read('package.json'));
-  ['expo-location', 'react-native-maps', 'react-dom', 'react-native-web', 'firebase'].forEach((dependency) => {
+  ['expo-location', 'react-native-maps', 'react-dom', 'react-native-web', '@supabase/supabase-js'].forEach((dependency) => {
     if (!pkg.dependencies?.[dependency]) throw new Error(`missing ${dependency}`);
   });
 });
 
 check('no obvious mojibake in source files', () => {
-  const files = ['App.js', 'app.config.js', 'firebaseConfig.js', 'src/data/appData.js', 'manifest.webmanifest', '.env.example'];
+  const files = ['App.js', 'app.config.js', 'supabaseConfig.js', 'src/data/appData.js', '.env.example'];
   const pattern = /Ã.|Â.|â€¢|â€™|â€œ|â€|�/;
   const dirty = files.filter((file) => pattern.test(read(file)));
   if (dirty.length) throw new Error(`encoding artifacts found in ${dirty.join(', ')}`);

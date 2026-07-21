@@ -1,0 +1,21 @@
+export const restaurant = {
+  id: 'coco-bambu-rio-preto',
+  name: 'Coco Bambu São José do Rio Preto',
+  type: 'Frutos do mar',
+  district: 'Iguatemi',
+  price: '$$$$',
+  rating: 4.8,
+  reviews: 637,
+  open: true,
+  phone: '551733543454',
+  address: 'Av. Pres. Juscelino K. de Oliveira, 5000',
+  latitude: -20.8197,
+  longitude: -49.4042,
+  image: 'https://cocobambu.com.br/web/image/1480-fbd8782c/IMG_8474.webp',
+  logo: null,
+  coverPhoto: null,
+  photos: [],
+  description: 'Rede conhecida por pratos fartos de camarão, peixes, massas e ambiente amplo no eixo do Iguatemi.',
+  highlights: ['Camarão', 'Peixes', 'Ambiente amplo'],
+  tags: ['família', 'reserva', 'shopping']
+};

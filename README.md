@@ -1,16 +1,16 @@
 # Dine / Mesa Boa
 
-Aplicativo Expo/React Native para descoberta de restaurantes parceiros, com mapa, coleções, favoritos, perfil e cadastro de restaurantes.
+Aplicativo Expo/React Native para descoberta de restaurantes parceiros, com mapa, colecoes, favoritos, perfil e cadastro de restaurantes.
 
 ## Setup local
 
-1. Instale as dependências:
+1. Instale as dependencias:
 
 ```bash
 npm install
 ```
 
-2. Copie as variáveis de ambiente:
+2. Copie as variaveis de ambiente:
 
 ```bash
 copy .env.example .env
@@ -19,17 +19,22 @@ copy .env.example .env
 3. Preencha as chaves no `.env`:
 
 ```env
-EXPO_PUBLIC_FIREBASE_API_KEY=
-EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=
-EXPO_PUBLIC_FIREBASE_PROJECT_ID=
-EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET=
-EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=
-EXPO_PUBLIC_FIREBASE_APP_ID=
+EXPO_PUBLIC_SUPABASE_URL=https://seu-projeto.supabase.co
+EXPO_PUBLIC_SUPABASE_ANON_KEY=
 EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=
 EXPO_PUBLIC_ADMIN_EMAIL=
+EXPO_PUBLIC_ADMIN_EMAILS=
 ```
 
-4. Rode o app:
+4. Aplique as migrations no Supabase:
+
+```bash
+npx supabase db push
+```
+
+Ou cole os arquivos de `supabase/migrations/` no SQL Editor do painel Supabase, na ordem dos nomes.
+
+5. Rode o app:
 
 ```bash
 npm start
@@ -45,94 +50,67 @@ npm run web
 
 ## Banco e dados
 
-O app usa Firebase/Firestore em `firebaseConfig.js`.
+O app usa Supabase em `supabaseConfig.js`, que cria o client com `@supabase/supabase-js` e concentra a camada de servicos remotos.
 
-Coleções usadas hoje:
+Migrations principais:
 
-- `restaurants`: restaurantes publicados ou cadastrados localmente.
-- `userFavorites`: favoritos por usuário.
-- `users`: perfil básico do usuário.
-- `restaurantReviews`: avaliações/comentários sociais por restaurante.
+- `202607070001_initial_schema.sql`: schema base de restaurantes, perfis, roles, avaliacoes, favoritos e metricas.
+- `202607070002_storage_policies.sql`: bucket publico `restaurant-media`.
+- `202607210001_app_supabase_facade.sql`: campos e tabelas de compatibilidade para o app Expo atual.
+
+Tabelas usadas pela camada do app:
+
+- `restaurants`: restaurantes publicados, pendentes e dados do painel do restaurante.
+- `reviews`: comentarios/avaliacoes sociais por restaurante.
+- `app_profiles`: perfil local/demo sincronizado.
+- `app_favorites`: favoritos por usuario local/demo.
+- `feed_posts`, `feed_comments`, `feed_reactions`: feed social.
+- `moderation_reports`: denuncias e fila de moderacao.
+- `user_blocks`: bloqueios entre perfis.
+- `invites`, `invite_redemptions`: links e usos de convite.
+- `push_tokens`, `notification_queue`: notificacoes.
 
 Campos importantes de `restaurants`:
 
-- `name`
-- `type`
-- `district`
-- `price`
-- `rating`
-- `reviews`
-- `open`
-- `phone`
-- `address`
-- `latitude`
-- `longitude`
-- `image`
-- `description`
-- `ownerId`
-- `ownerName`
-- `ownerEmail`
-- `status`: `pending`, `published`, `paused`, `archived` ou `rejected`
-- `approval`
-- `photos`
-- `coverPhoto`
-- `menuItems`
-- `openingHours`
-- `reservationUrl`
-- `instagram`
-- `whatsapp`
-- `tags`
-- `highlights`
-- `claim`
-- `metrics`
+- `legacy_id`: id textual usado pelo app.
+- `owner_legacy_id`: id textual do usuario local/demo.
+- `app_payload`: payload completo do app para preservar campos ricos da UI.
+- `name`, `cuisine_type`, `district`, `price_tier`, `rating`, `reviews_count`, `status`, `cover_image_url`, `tags`, `opening_hours`.
 
 Fluxo atual:
 
-- Novo restaurante é salvo como `pending`.
-- Admin definido por `EXPO_PUBLIC_ADMIN_EMAIL` pode publicar ou rejeitar na tela de aprovações.
-- Proprietário pode editar, pausar, reativar ou arquivar pelo painel do restaurante.
-- Métricas de visualização, Maps, WhatsApp e reserva são incrementadas no Firestore.
-- Reivindicação de restaurante grava `claim.status = pending` no documento do restaurante.
+- Novo restaurante e salvo como `pending`.
+- Admin definido por `EXPO_PUBLIC_ADMIN_EMAIL` ou `EXPO_PUBLIC_ADMIN_EMAILS` pode publicar ou rejeitar na tela de aprovacoes.
+- Proprietario pode editar, pausar, reativar ou arquivar pelo painel do restaurante.
+- Metricas de visualizacao, Maps, WhatsApp e reserva sao sincronizadas no Supabase.
+- Fotos de perfil, feed e restaurantes sobem para Supabase Storage no bucket `restaurant-media`; se o upload falhar, o app usa URI local como fallback.
 
-Avaliações sociais:
+Nota de seguranca:
 
-- Cada avaliação fica em `restaurantReviews`.
-- Campos principais: `restaurantId`, `userId`, `userName`, `rating`, `comment`, `likes`, `likedBy`, `pinned`.
-- Usuários podem comentar e curtir.
-- Admin pode fixar/desfixar comentários.
+O app ainda usa contas locais/demo, nao Supabase Auth. Por isso a migration de compatibilidade libera policies para `anon` sincronizar os dados esperados pelo app. Para producao, o proximo passo recomendado e migrar login/perfil para Supabase Auth e endurecer RLS usando `auth.uid()`.
 
-## Gamificação
+## Gamificacao
 
-O perfil mantém `gamification` no usuário:
+O perfil mantem `gamification` no usuario:
 
-- `points`: pontuação total.
-- `metrics`: contadores de favoritos, rotas abertas, avaliações, restaurantes conhecidos, curtidas dadas, convites e coleções.
-- `awarded`: ids já pontuados para evitar farmar a mesma ação repetidamente.
+- `points`: pontuacao total.
+- `metrics`: contadores de favoritos, rotas abertas, avaliacoes, restaurantes conhecidos, curtidas dadas, convites e colecoes.
+- `awarded`: ids ja pontuados para evitar farmar a mesma acao repetidamente.
 - `achievements`: conquistas liberadas.
 
 Ranks:
 
 - Beliscador
-- Caçador de Mesa
+- Cacador de Mesa
 - Garfo Curioso
-- Roteirista de Rolês
-- Sommelier de Experiências
+- Roteirista de Roles
+- Sommelier de Experiencias
 - Curador Dine
 - Lenda da Reserva
 
-Pontuação inicial:
-
-- Salvar restaurante: `+5`
-- Abrir rota no mapa: `+5`
-- Avaliar/comentar restaurante: `+20`
-- Marcar restaurante como conhecido: `+30`
-- Curtir comentário: `+2`
-
-Também existe uma pasta `supabase/migrations` com modelagem inicial para uma futura migração/expansão. Hoje a tela principal do app ainda usa Firebase.
-
 ## Qualidade
 
-Rode o smoke check antes de entregar mudanças:
+Rode o smoke check antes de entregar mudancas:
 
 ```bash
 npm run smoke
@@ -141,11 +119,11 @@ npm run smoke
 Ele valida:
 
 - parse JSX do `App.js`;
-- resolução do `app.config.js`;
-- dependências essenciais;
-- ruídos comuns de codificação;
-- telas registradas na navegação interna;
-- dívida atual de camadas de estilo.
+- resolucao do `app.config.js`;
+- dependencias essenciais;
+- ruidos comuns de codificacao;
+- telas registradas na navegacao interna;
+- divida atual de camadas de estilo.
 
 Para validar o bundle web:
 
@@ -153,40 +131,31 @@ Para validar o bundle web:
 npx expo export --platform web --output-dir .expo-export-smoke
 ```
 
-Depois da validação, o diretório `.expo-export-smoke/` pode ser apagado. Ele já está no `.gitignore`.
+Depois da validacao, o diretorio `.expo-export-smoke/` pode ser apagado. Ele ja esta no `.gitignore`.
 
 ## Checklist manual
 
 Android:
 
-- Abrir `Explorar`, `Coleções`, `Mapa`, `Favoritos`, `Perfil`.
-- Pedir localização no mapa e testar permissão aceita/negada.
-- Abrir filtros da busca e aplicar cidade, raio e filtros rápidos.
-- Abrir detalhes de restaurante e botões de WhatsApp/Maps.
+- Abrir `Explorar`, `Colecoes`, `Mapa`, `Favoritos`, `Perfil`.
+- Pedir localizacao no mapa e testar permissao aceita/negada.
+- Abrir filtros da busca e aplicar cidade, raio e filtros rapidos.
+- Abrir detalhes de restaurante e botoes de WhatsApp/Maps.
 
 iPhone:
 
 - Repetir fluxo do Android.
-- Conferir se o rodapé não cobre conteúdo em telas com safe area.
-- Conferir permissões de localização.
+- Conferir se o rodape nao cobre conteudo em telas com safe area.
+- Conferir permissoes de localizacao.
 
 Web:
 
 - Abrir `npm run web`.
 - Confirmar fallback do mapa.
-- Confirmar que localização mostra fallback elegante.
+- Confirmar que localizacao mostra fallback elegante.
 
-Telas pequenas:
+## Divida tecnica conhecida
 
-- Conferir cards da home.
-- Conferir lista do mapa.
-- Conferir formulário de cadastro de restaurante.
-
-## Dívida técnica conhecida
-
-- `App.js` concentra dados, telas e estilos. O próximo passo estrutural é separar em `src/data`, `src/components`, `src/screens` e `src/styles`.
-- Dados estáticos iniciais já foram movidos para `src/data/appData.js`.
-- Há duas camadas históricas de `Object.assign(styles, ...)`. O smoke check permite no máximo duas e avisa sobre isso.
-- `Backup/`, `BackLog/` e `macaco.html` parecem arquivos históricos. Não foram removidos automaticamente para evitar perda de referência.
-- As imagens remotas do Unsplash já usam parâmetros de largura/qualidade, mas ainda precisam de política de cache/thumbnail para produção.
-- O bundle web atual exportado ficou em torno de 1.92 MB de JS, com peso relevante em fontes/ícones. Vale reduzir famílias/pesos de fonte e imports de ícones antes de produção.
+- `App.js` concentra dados, telas e estilos. O proximo passo estrutural e separar em `src/data`, `src/components`, `src/screens` e `src/styles`.
+- Dados estaticos iniciais ja foram movidos para `src/data/appData.js`.
+- Ha duas camadas historicas de `Object.assign(styles, ...)`. O smoke check permite no maximo duas e avisa sobre isso.

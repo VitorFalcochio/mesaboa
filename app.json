@@ -4,6 +4,7 @@
     "slug": "bocado-rio-preto",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./Designer/Logos/2.png",
     "userInterfaceStyle": "light",
     "backgroundColor": "#FFF8EE",
     "scheme": "bocado",
@@ -14,6 +15,7 @@
     "android": {
       "package": "com.mesaboa.riopreto",
       "adaptiveIcon": {
+        "foregroundImage": "./Designer/Logos/2.png",
         "backgroundColor": "#06140f"
       }
     },

@@ -1,0 +1,21 @@
+export const restaurant = {
+  id: 'bella-capri-redentora',
+  name: 'Bella Capri Pizza & Pasta - Redentora',
+  type: 'Pizzaria',
+  district: 'Vila Redentora',
+  price: '$$',
+  rating: 4.6,
+  reviews: 430,
+  open: true,
+  phone: '5508007659999',
+  address: 'Rua Dr. Raul Silva, 308',
+  latitude: -20.8149,
+  longitude: -49.3848,
+  image: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=1000&q=82',
+  logo: null,
+  coverPhoto: null,
+  photos: [],
+  description: 'Unidade Redentora da rede rio-pretense de pizzas e massas, boa para pedidos rápidos e jantar em família.',
+  highlights: ['Pizza', 'Massa', 'Pedido rápido'],
+  tags: ['pizza', 'família', 'delivery']
+};

@@ -1,0 +1,21 @@
+export const restaurant = {
+  id: 'don-leon-rio-preto',
+  name: 'Don León',
+  type: 'Espanhol e mediterrâneo',
+  district: 'Vila Redentora',
+  price: '$$$$',
+  rating: 4.8,
+  reviews: 757,
+  open: true,
+  phone: '5517992472744',
+  address: 'Rua Generosa Bastos, 3135',
+  latitude: -20.8154,
+  longitude: -49.3831,
+  image: 'https://images.unsplash.com/photo-1600891964599-f61ba0e24092?auto=format&fit=crop&w=1000&q=82',
+  logo: null,
+  coverPhoto: null,
+  photos: [],
+  description: 'Restaurante de inspiração espanhola com paellas, frutos do mar, vinhos e serviço de ocasião especial.',
+  highlights: ['Paella', 'Vinhos', 'Cozinha espanhola'],
+  tags: ['romântico', 'reserva', 'ocasião especial']
+};

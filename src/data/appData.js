@@ -1,3 +1,20 @@
+export { seedRestaurants } from '../restaurants';
+
+export const seedUsers = [
+  {
+    id: 'vitor-demo',
+    name: 'Vitor',
+    email: 'vitorfalcochio@gmail.com',
+    password: '@Vitor091107',
+    gamification: {
+      points: 120,
+      metrics: { favorites: 0, maps: 0, reviews: 0, known: 0, likesGiven: 0, commentLikes: 0, invites: 0, collections: 0 },
+      awarded: { favorites: [], maps: [], reviews: [], known: [], likes: [], collections: [], invites: [] },
+      achievements: []
+    }
+  }
+];
+
 export const defaultImage = 'https://images.unsplash.com/photo-1559339352-11d035aa65de?auto=format&fit=crop&w=900&q=85';
 
 export const rioPretoRegion = {
@@ -26,103 +43,19 @@ export const areaOptions = [
 
 export const radiusOptions = [2, 5, 10, 20];
 
-export const seedRestaurants = [
-  {
-    id: '1',
-    name: 'Brasa Alta Prime',
-    type: 'Churrascaria',
-    district: 'Vila Redentora',
-    price: '$$$$',
-    rating: 9.7,
-    reviews: 428,
-    open: true,
-    phone: '5517988881010',
-    address: 'Av. Alberto Andaló, 3120',
-    latitude: -20.8157,
-    longitude: -49.3793,
-    image: 'https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=1000&q=82',
-    description: 'Casa de carnes premium com salão elegante, carta de vinhos e experiência consistente para ocasiões especiais.'
-  },
-  {
-    id: '2',
-    name: 'Nori Jardim',
-    type: 'Japonês',
-    district: 'Jardim Vivendas',
-    price: '$$$',
-    rating: 9.6,
-    reviews: 361,
-    open: true,
-    phone: '5517988882020',
-    address: 'Rua das Acácias, 455',
-    latitude: -20.8068,
-    longitude: -49.3905,
-    image: 'https://images.unsplash.com/photo-1553621042-f6e147245754?auto=format&fit=crop&w=1000&q=82',
-    description: 'Japonês contemporâneo, ótimo para casal, reservas e jantares mais tranquilos.'
-  },
-  {
-    id: '3',
-    name: 'Cantina Andaló',
-    type: 'Italiano',
-    district: 'Centro',
-    price: '$$$',
-    rating: 9.4,
-    reviews: 298,
-    open: true,
-    phone: '5517988883030',
-    address: 'Rua XV de Novembro, 720',
-    latitude: -20.8193,
-    longitude: -49.3742,
-    image: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=1000&q=82',
-    description: 'Massas, vinhos e atendimento familiar para almoço e jantar no Centro.'
-  },
-  {
-    id: '4',
-    name: 'Casa da Esquina Burger',
-    type: 'Hamburgueria',
-    district: 'Boa Vista',
-    price: '$$',
-    rating: 9.2,
-    reviews: 512,
-    open: true,
-    phone: '5517988884040',
-    address: 'Rua Boa Vista, 88',
-    latitude: -20.8282,
-    longitude: -49.3836,
-    image: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=1000&q=82',
-    description: 'Hambúrguer artesanal, delivery rápido e bom custo-benefício.'
-  },
-  {
-    id: '5',
-    name: 'Forno Rio Preto',
-    type: 'Pizzaria',
-    district: 'Jardim Alto Rio Preto',
-    price: '$$',
-    rating: 9.1,
-    reviews: 474,
-    open: true,
-    phone: '5517988885050',
-    address: 'Av. Bady Bassitt, 1550',
-    latitude: -20.8106,
-    longitude: -49.3672,
-    image: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=1000&q=82',
-    description: 'Pizzas de fermentação longa, ambiente familiar e opções para delivery.'
-  },
-  {
-    id: '6',
-    name: 'Café Ipê',
-    type: 'Café',
-    district: 'Vila Imperial',
-    price: '$$',
-    rating: 9.0,
-    reviews: 246,
-    open: true,
-    phone: '5517988886060',
-    address: 'Rua Imperial, 204',
-    latitude: -20.8214,
-    longitude: -49.3921,
-    image: 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=1000&q=82',
-    description: 'Cafés especiais, brunch e espaço agradável para encontros rápidos.'
-  }
+export const seedRestaurantLegacyNames = [
+  'Brasa Alta Prime',
+  'Nori Jardim',
+  'Cantina Andaló',
+  'Casa da Esquina Burger',
+  'Forno Rio Preto',
+  'Café Ipê',
+  'Restaurante Jangada',
+  'Coco Bambu São José do Rio Preto',
+  "L'Osteria",
+  'Don León',
+  'Churrascaria Farrougrill',
+  'Bella Capri Pizza & Pasta - Redentora'
 ];
 
 export const categories = [
@@ -136,7 +69,7 @@ export const categories = [
 
 export const tabs = [
   ['Explorar', 'compass-outline'],
-  ['Coleções', 'bookmark-outline'],
+  ['Feed', 'albums-outline'],
   ['Favoritos', 'heart-outline'],
   ['Mapa', 'location-outline'],
   ['Perfil', 'person-outline']
