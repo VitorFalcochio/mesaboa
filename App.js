@@ -314,8 +314,9 @@ const storageKeys = {
   onboardingSeen: 'dineOnboardingSeenRN'
 };
 const homeRestaurantSectionLimit = 15;
+const demoDataEnabled = process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA === 'true';
 const demoAccountEmail = 'vitorfalcochio@gmail.com';
-const builtInAdminEmails = [demoAccountEmail, 'felipe.fde08@gmail.com'];
+const builtInAdminEmails = demoDataEnabled ? [demoAccountEmail] : [];
 const demoAccountId = 'vitor-demo';
 const demoAccountName = 'Vitor';
 const demoRestaurantId = 'vitor-falcochio-teste';
@@ -428,6 +429,7 @@ function mergeSeedRestaurantMenus(items) {
 }
 
 function normalizeDemoAccount(user) {
+  if (!demoDataEnabled) return user;
   if (!user || normalize(user.email) !== normalize(demoAccountEmail)) return user;
   const demoSeed = seedUsers.find((item) => normalize(item.email) === normalize(demoAccountEmail));
   return {
@@ -1239,7 +1241,7 @@ export default function App() {
   }, [currentUser, hydrated, isAdmin, restaurants]);
 
   useEffect(() => {
-    if (!hydrated || !currentUser || normalize(currentUser.email) !== normalize('vitorfalcochio@gmail.com')) return;
+    if (!demoDataEnabled || !hydrated || !currentUser || normalize(currentUser.email) !== normalize(demoAccountEmail)) return;
     if (demoRestaurantSeededRef.current) return;
     const demoRestaurant = seedRestaurants.find((item) => item.id === demoRestaurantId);
     if (!demoRestaurant) return;

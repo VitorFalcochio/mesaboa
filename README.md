@@ -24,6 +24,7 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=
 EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=
 EXPO_PUBLIC_ADMIN_EMAIL=
 EXPO_PUBLIC_ADMIN_EMAILS=
+EXPO_PUBLIC_ENABLE_DEMO_DATA=false
 ```
 
 4. Aplique as migrations no Supabase:
@@ -81,6 +82,7 @@ Fluxo atual:
 
 - Novo restaurante e salvo como `pending`.
 - Admin definido por `EXPO_PUBLIC_ADMIN_EMAIL` ou `EXPO_PUBLIC_ADMIN_EMAILS` pode publicar ou rejeitar na tela de aprovacoes.
+- Dados/contas demo so devem ser ativados localmente com `EXPO_PUBLIC_ENABLE_DEMO_DATA=true`.
 - Proprietario pode editar, pausar, reativar ou arquivar pelo painel do restaurante.
 - Metricas de visualizacao, Maps, WhatsApp e reserva sao sincronizadas no Supabase.
 - Fotos de perfil, feed e restaurantes sobem para Supabase Storage no bucket `restaurant-media`; se o upload falhar, o app usa URI local como fallback.

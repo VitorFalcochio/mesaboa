@@ -10,10 +10,15 @@
     "scheme": "bocado",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.mesaboa.riopreto"
+      "bundleIdentifier": "com.mesaboa.riopreto",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.mesaboa.riopreto",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./Designer/Logos/2.png",
         "backgroundColor": "#06140f"

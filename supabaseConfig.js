@@ -26,7 +26,8 @@ export const roles = {
 };
 
 const RESTAURANT_BUCKET = 'restaurant-media';
-const builtInAdminEmails = ['vitorfalcochio@gmail.com', 'felipe.fde08@gmail.com'];
+const demoDataEnabled = process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA === 'true';
+const builtInAdminEmails = demoDataEnabled ? ['vitorfalcochio@gmail.com'] : [];
 const configuredAdminEmails = [
   ...builtInAdminEmails,
   process.env.EXPO_PUBLIC_ADMIN_EMAIL,

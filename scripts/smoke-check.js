@@ -28,6 +28,18 @@ check('Expo config resolves', () => {
   if (!config.android || !config.ios) throw new Error('missing android or ios config');
 });
 
+check('release config is present', () => {
+  const app = JSON.parse(read('app.json')).expo;
+  if (!app?.ios?.bundleIdentifier) throw new Error('missing ios.bundleIdentifier');
+  if (!app?.ios?.buildNumber) throw new Error('missing ios.buildNumber');
+  if (!app?.android?.package) throw new Error('missing android.package');
+  if (!Number.isInteger(app?.android?.versionCode)) throw new Error('missing android.versionCode');
+
+  const eas = JSON.parse(read('eas.json'));
+  if (!eas?.build?.production) throw new Error('missing EAS production build profile');
+  if (!eas?.submit?.production?.ios) throw new Error('missing EAS production iOS submit profile');
+});
+
 check('required dependencies are installed', () => {
   const pkg = JSON.parse(read('package.json'));
   ['expo-location', 'react-native-maps', 'react-dom', 'react-native-web', '@supabase/supabase-js'].forEach((dependency) => {
