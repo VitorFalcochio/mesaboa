@@ -1,4 +1,4 @@
-# Mesa Boa by Vitor
+# Dine by Vitor
 
 Perfil de teste para usar no painel do restaurante.
 

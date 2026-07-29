@@ -1,4 +1,4 @@
-# Dine / Mesa Boa
+# Dine
 
 Aplicativo Expo/React Native para descoberta de restaurantes parceiros, com mapa, colecoes, favoritos, perfil e cadastro de restaurantes.
 

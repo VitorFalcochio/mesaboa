@@ -307,11 +307,11 @@ const NativeMaps = Platform.OS !== 'web' ? require('react-native-maps') : null;
 const MapView = NativeMaps?.default;
 const Marker = NativeMaps?.Marker;
 const storageKeys = {
-  restaurants: 'mesaBoaRestaurantsRN',
-  favorites: 'mesaBoaFavoritesRN',
-  users: 'mesaBoaUsersRN',
-  currentUser: 'mesaBoaCurrentUserRN',
-  restaurantCoordinates: 'mesaBoaRestaurantCoordinatesRN',
+  restaurants: 'dineRestaurantsRN',
+  favorites: 'dineFavoritesRN',
+  users: 'dineUsersRN',
+  currentUser: 'dineCurrentUserRN',
+  restaurantCoordinates: 'dineRestaurantCoordinatesRN',
   onboardingSeen: 'dineOnboardingSeenRN'
 };
 const homeRestaurantSectionLimit = 15;
@@ -322,6 +322,7 @@ const builtInAdminEmails = demoDataEnabled ? [demoAccountEmail] : [];
 const demoAccountId = 'vitor-demo';
 const demoAccountName = 'Vitor';
 const demoRestaurantId = 'vitor-falcochio-teste';
+
 const collectionCurations = [
   {
     title: 'Jantar especial',
@@ -768,7 +769,7 @@ async function geocodeRestaurantCoordinate(item) {
     const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${encodeURIComponent(query)}`, {
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'MesaBoa/1.0'
+        'User-Agent': 'Dine/1.0'
       }
     });
     if (!response.ok) return null;
@@ -1538,7 +1539,7 @@ export default function App() {
     const authorProfiles = [
       { id: 'dine-curadoria', name: 'Dine Curadoria', handle: '@dine', bio: 'Roteiros, pratos e achados da cidade.', instagram: '@dineapp', followers: 12800, following: 42, avatar: restaurant.logo || restaurant.image },
       { id: 'vitor-feed', name: 'Vitor', handle: '@vitor', bio: 'Compartilhando lugares bons para comer e voltar.', instagram: '@vitor', followers: 842, following: 318, avatar: restaurant.logo || restaurant.image },
-      { id: 'mesa-boa', name: 'Mesa Boa', handle: '@mesaboa', bio: 'Momentos de mesa, pratos favoritos e novas descobertas.', instagram: '@mesaboa', followers: 2450, following: 174, avatar: restaurant.logo || restaurant.image }
+      { id: 'dine-comunidade', name: 'Dine Comunidade', handle: '@dine', bio: 'Momentos de mesa, pratos favoritos e novas descobertas.', instagram: '@dineapp', followers: 2450, following: 174, avatar: restaurant.logo || restaurant.image }
     ];
     const authorProfile = authorProfiles[index % authorProfiles.length];
     const captions = [
