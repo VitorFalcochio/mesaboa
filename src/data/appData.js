@@ -69,8 +69,7 @@ export const categories = [
 
 export const tabs = [
   ['Explorar', 'compass-outline'],
-  ['Feed', 'albums-outline'],
-  ['Favoritos', 'heart-outline'],
+  ['Feed', 'newspaper-outline'],
   ['Mapa', 'location-outline'],
   ['Perfil', 'person-outline']
 ];
