@@ -1,23 +1,23 @@
 {
   "expo": {
-    "name": "Bocado Rio Preto",
-    "slug": "bocado-rio-preto",
+    "name": "Dine",
+    "slug": "dine",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./Designer/Logos/2.png",
     "userInterfaceStyle": "light",
     "backgroundColor": "#FFF8EE",
-    "scheme": "bocado",
+    "scheme": "dine",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.mesaboa.riopreto",
+      "bundleIdentifier": "com.dine.app",
       "buildNumber": "1",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.mesaboa.riopreto",
+      "package": "com.dine.app",
       "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./Designer/Logos/2.png",
@@ -25,7 +25,9 @@
       }
     },
     "web": {
-      "bundler": "metro"
+      "bundler": "metro",
+      "name": "Dine",
+      "shortName": "Dine"
     },
     "plugins": [
       "expo-asset",

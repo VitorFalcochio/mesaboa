@@ -1,6 +1,6 @@
 export const restaurant = {
   id: 'vitor-falcochio-teste',
-  name: 'Mesa Boa by Vitor',
+  name: 'Dine by Vitor',
   type: 'Contemporâneo',
   district: 'Centro',
   price: '$$$',
