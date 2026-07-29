@@ -709,6 +709,14 @@ function buildRestaurantGeocodeQuery(item) {
   return parts.join(', ');
 }
 
+function googleMapsEmbedUrl(region) {
+  const latitude = Number(region?.latitude || rioPretoRegion.latitude);
+  const longitude = Number(region?.longitude || rioPretoRegion.longitude);
+  const delta = Math.max(Number(region?.latitudeDelta || rioPretoRegion.latitudeDelta), Number(region?.longitudeDelta || rioPretoRegion.longitudeDelta));
+  const zoom = delta <= 0.025 ? 15 : delta <= 0.04 ? 14 : 13;
+  return `https://www.google.com/maps?q=${latitude},${longitude}&z=${zoom}&output=embed`;
+}
+
 async function geocodeRestaurantCoordinate(item) {
   const query = buildRestaurantGeocodeQuery(item);
   if (!query) return null;
@@ -968,6 +976,44 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
             />
           ))}
         </MapView>
+      </View>
+    );
+  }
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.mapCard}>
+        {React.createElement('iframe', {
+          title: 'Mapa de restaurantes em Sao Jose do Rio Preto',
+          src: googleMapsEmbedUrl(region),
+          loading: 'lazy',
+          allowFullScreen: true,
+          referrerPolicy: 'no-referrer-when-downgrade',
+          style: {
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            border: 0
+          }
+        })}
+        <View pointerEvents="none" style={styles.webMapScrim} />
+        <View style={styles.mapCompass}>
+          <Ionicons name="navigate" size={16} color={colors.redDark} />
+          <Text style={styles.mapCompassText}>Dine</Text>
+        </View>
+        {restaurants.slice(0, 5).map((item, index) => (
+          <Pressable key={item.id} onPress={() => onSelect(item)} style={[styles.mapPin, styles[`pin${index}`]]}>
+            <View style={[styles.mapPinBubble, index === 2 && styles.mapPinBubbleAlt]}>
+              <MaterialCommunityIcons name="silverware-fork-knife" size={16} color={colors.card} />
+            </View>
+            <View style={[styles.mapPinTip, index === 2 && styles.mapPinTipAlt]} />
+            <View style={styles.mapPinLabel}>
+              <Text numberOfLines={1} style={styles.mapPinName}>{item.name}</Text>
+              <Text numberOfLines={1} style={styles.mapPinMeta}>{Number.isFinite(item.distanceKm) ? formatDistance(item.distanceKm) : item.type}</Text>
+            </View>
+          </Pressable>
+        ))}
       </View>
     );
   }
@@ -6396,6 +6442,7 @@ Object.assign(styles, {
   realMapCard: { height: 420, marginHorizontal: -22, backgroundColor: '#EAF0E1', overflow: 'hidden' },
   realMap: { flex: 1 },
   mapCard: { height: 420, marginHorizontal: -22, backgroundColor: '#EAF0E1', overflow: 'hidden' },
+  webMapScrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(255, 246, 234, 0.08)' },
   mapZone: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(40, 40, 43, 0.07)' },
   mapZoneNorth: { left: -26, top: -30, width: 210, height: 168, borderRadius: 36, backgroundColor: '#F4E6CF', transform: [{ rotate: '-12deg' }] },
   mapZonePark: { right: -36, top: 28, width: 190, height: 205, borderRadius: 46, backgroundColor: '#D9E7CB', transform: [{ rotate: '13deg' }] },
@@ -6414,9 +6461,9 @@ Object.assign(styles, {
   mapLabelNorth: { left: 25, top: 48 },
   mapLabelCenter: { left: 134, top: 202 },
   mapLabelSouth: { right: 36, bottom: 100 },
-  mapCompass: { position: 'absolute', left: 22, top: 22, minHeight: 34, borderRadius: 18, paddingHorizontal: 12, gap: 6, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 253, 247, 0.92)', borderWidth: 1, borderColor: colors.line },
+  mapCompass: { position: 'absolute', left: 22, top: 22, zIndex: 4, minHeight: 34, borderRadius: 18, paddingHorizontal: 12, gap: 6, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 253, 247, 0.92)', borderWidth: 1, borderColor: colors.line },
   mapCompassText: { color: colors.ink, fontFamily: bodyFont, fontSize: 13 },
-  mapPin: { position: 'absolute', minWidth: 118, minHeight: 74 },
+  mapPin: { position: 'absolute', zIndex: 5, minWidth: 118, minHeight: 74 },
   mapPinBubble: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center', borderWidth: 4, borderColor: colors.card, shadowColor: colors.ink, shadowOpacity: 0.18, shadowRadius: 8, elevation: 5 },
   mapPinBubbleAlt: { backgroundColor: colors.olive },
   mapPinTip: { marginLeft: 15, marginTop: -5, width: 0, height: 0, borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 10, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: colors.redDark },
