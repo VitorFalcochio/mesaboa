@@ -62,6 +62,23 @@ check('navigation targets are registered', () => {
   if (missing.length) throw new Error(`missing screen registrations: ${missing.join(', ')}`);
 });
 
+check('App Store review controls are present', () => {
+  const app = read('App.js');
+  const supabase = read('supabaseConfig.js');
+  [
+    'privacyPolicyUrl',
+    'deleteCurrentAccount',
+    'moderationIssueForText',
+    'reportContent',
+    'blockProfile',
+    'removeReview',
+    'Moderacao de conteudo'
+  ].forEach((needle) => {
+    if (!app.includes(needle)) throw new Error(`missing ${needle}`);
+  });
+  if (!supabase.includes('deleteUserAccountInDb')) throw new Error('missing remote account deletion helper');
+});
+
 check('style override debt is tracked', () => {
   const app = read('App.js');
   const layers = (app.match(/Object\.assign\(styles/g) || []).length;

@@ -25,6 +25,7 @@ EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=
 EXPO_PUBLIC_ADMIN_EMAIL=
 EXPO_PUBLIC_ADMIN_EMAILS=
 EXPO_PUBLIC_ENABLE_DEMO_DATA=false
+EXPO_PUBLIC_PRIVACY_POLICY_URL=
 ```
 
 4. Aplique as migrations no Supabase:
@@ -83,6 +84,7 @@ Fluxo atual:
 - Novo restaurante e salvo como `pending`.
 - Admin definido por `EXPO_PUBLIC_ADMIN_EMAIL` ou `EXPO_PUBLIC_ADMIN_EMAILS` pode publicar ou rejeitar na tela de aprovacoes.
 - Dados/contas demo so devem ser ativados localmente com `EXPO_PUBLIC_ENABLE_DEMO_DATA=true`.
+- A politica de privacidade publica deve ser configurada em `EXPO_PUBLIC_PRIVACY_POLICY_URL` e aparece dentro do app.
 - Proprietario pode editar, pausar, reativar ou arquivar pelo painel do restaurante.
 - Metricas de visualizacao, Maps, WhatsApp e reserva sao sincronizadas no Supabase.
 - Fotos de perfil, feed e restaurantes sobem para Supabase Storage no bucket `restaurant-media`; se o upload falhar, o app usa URI local como fallback.
@@ -99,6 +101,19 @@ O perfil mantem `gamification` no usuario:
 - `metrics`: contadores de favoritos, rotas abertas, avaliacoes, restaurantes conhecidos, curtidas dadas, convites e colecoes.
 - `awarded`: ids ja pontuados para evitar farmar a mesma acao repetidamente.
 - `achievements`: conquistas liberadas.
+
+## App Store e moderacao
+
+O app tem experiencia nativa de descoberta, busca/filtros, favoritos, mapa/rotas, avaliacoes, feed, compartilhamento, notificacoes e fallback de localizacao por cidade/bairro.
+
+Controles exigidos para conteudo gerado por usuarios:
+
+- Denuncia em restaurante, publicacao, perfil e avaliacao.
+- Bloqueio de perfis em perfil publico e em `Configuracoes > Contas bloqueadas`.
+- Filtro local de termos ofensivos antes de publicar post, comentario ou avaliacao.
+- Fila de moderacao na `Central admin`.
+- Remocao de avaliacoes por admin no detalhe do restaurante.
+- Exclusao de conta em `Perfil > Configuracoes > Seguranca > Excluir minha conta`.
 
 Ranks:
 

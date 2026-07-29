@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#FFF8EE"/>
+  <circle cx="256" cy="256" r="188" fill="#7A1F1F"/>
+  <circle cx="256" cy="256" r="152" fill="#FFF8EE"/>
+  <path d="M153 328h206" stroke="#7A1F1F" stroke-width="18" stroke-linecap="round"/>
+  <path d="M185 292c32 28 110 28 142 0" fill="none" stroke="#D09A45" stroke-width="16" stroke-linecap="round"/>
+  <text x="256" y="249" text-anchor="middle" font-family="Georgia, serif" font-size="104" font-weight="700" fill="#7A1F1F">LO</text>
+  <text x="256" y="376" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="700" letter-spacing="3" fill="#7A1F1F">OSTERIA</text>
+</svg>

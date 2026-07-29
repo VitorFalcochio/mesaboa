@@ -45,6 +45,7 @@ import {
   createInviteLinkInDb,
   createFeedPostInDb,
   createRestaurantInDb,
+  deleteUserAccountInDb,
   reportContentInDb,
   recordRestaurantMetricInDb,
   registerPushTokenInDb,
@@ -314,6 +315,7 @@ const storageKeys = {
   onboardingSeen: 'dineOnboardingSeenRN'
 };
 const homeRestaurantSectionLimit = 15;
+const privacyPolicyUrl = process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || 'https://dine.app/privacidade';
 const demoDataEnabled = process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA === 'true';
 const demoAccountEmail = 'vitorfalcochio@gmail.com';
 const builtInAdminEmails = demoDataEnabled ? [demoAccountEmail] : [];
@@ -375,6 +377,31 @@ function normalize(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
+const blockedContentTerms = [
+  'puta',
+  'foda-se',
+  'caralho',
+  'porra',
+  'buceta',
+  'cacete',
+  'merda',
+  'viado',
+  'bicha',
+  'preto imundo',
+  'macaco',
+  'racista',
+  'nazista',
+  'hitler',
+  'matar',
+  'estupro'
+];
+
+function moderationIssueForText(text) {
+  const normalized = normalize(text);
+  const matched = blockedContentTerms.find((term) => normalized.includes(normalize(term)));
+  return matched ? 'Revise o texto antes de publicar. O Dine bloqueia ofensas, discurso de odio, ameacas e conteudo sexual explicito.' : '';
+}
+
 function buildCollectionText(item) {
   return normalize([item?.name, item?.type, item?.district, item?.description, (item?.tags || []).join(' '), (item?.highlights || []).join(' ')].filter(Boolean).join(' '));
 }
@@ -416,7 +443,7 @@ function mergeSeedRestaurantMenus(items) {
   return items.map((item) => {
     const seed = seedsById.get(item?.id);
     if (!seed) return item;
-    const forceSeedBranding = seed.id === 'bb-onca-burguers';
+    const forceSeedBranding = ['bb-onca-burguers', 'losteria-rio-preto'].includes(seed.id);
     return {
       ...item,
       image: forceSeedBranding ? seed.image : item.image,
@@ -1516,6 +1543,11 @@ export default function App() {
     const text = String(feedCommentDrafts[post.id] || '').trim();
     if (!text) return;
     if (!currentUser && !requireLogin({ type: 'tab', target: 'Perfil' })) return;
+    const issue = moderationIssueForText(text);
+    if (issue) {
+      Alert.alert('Comentario bloqueado', issue);
+      return;
+    }
     const comment = {
       id: `${post.id}-${Date.now()}`,
       author: currentUser?.name || 'Visitante',
@@ -1638,6 +1670,11 @@ export default function App() {
     };
     if (!caption) {
       Alert.alert('Publicação', 'Escreva um texto curto para publicar.');
+      return;
+    }
+    const issue = moderationIssueForText(caption);
+    if (issue) {
+      Alert.alert('Publicacao bloqueada', issue);
       return;
     }
     if (!photos.length) {
@@ -1773,6 +1810,44 @@ export default function App() {
     if (!currentUser && !requireLogin({ type: 'tab', target: 'Perfil' })) return;
     const nextUser = { ...currentUser, ...patch };
     await saveCurrentUser(nextUser);
+  }
+
+  async function deleteCurrentAccount() {
+    if (!currentUser) {
+      requireLogin({ type: 'settings' });
+      return;
+    }
+    Alert.alert(
+      'Excluir minha conta',
+      'Isso remove sua sessao, perfil local, favoritos, bloqueios e solicita exclusao dos seus dados sincronizados. Esta acao nao pode ser desfeita neste aparelho.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Excluir conta',
+          style: 'destructive',
+          onPress: async () => {
+            const userId = currentUser.id;
+            const userEmail = currentUser.email;
+            try {
+              await deleteUserAccountInDb(currentUser);
+            } catch (error) {
+              Alert.alert('Exclusao solicitada', 'Nao conseguimos apagar tudo no servidor agora, mas removemos a conta deste aparelho. Fale com suporte para concluir a exclusao remota.');
+            }
+            const nextUsers = users.filter((user) => user.id !== userId && normalize(user.email) !== normalize(userEmail));
+            setUsers(nextUsers);
+            setCurrentUser(null);
+            setFavorites([]);
+            setActiveScreen(null);
+            setTab('Explorar');
+            await AsyncStorage.multiSet([
+              [storageKeys.users, JSON.stringify(nextUsers)],
+              [storageKeys.currentUser, 'null'],
+              [storageKeys.favorites, JSON.stringify([])]
+            ]);
+          }
+        }
+      ]
+    );
   }
 
   async function updateUserSettings(patch) {
@@ -2332,6 +2407,11 @@ export default function App() {
       Alert.alert('Comentário', 'Escreva um comentário para publicar.');
       return;
     }
+    const issue = moderationIssueForText(comment);
+    if (issue) {
+      Alert.alert('Avaliacao bloqueada', issue);
+      return;
+    }
     const review = {
       id: `${item.id}-${Date.now()}`,
       restaurantId: item.id,
@@ -2383,6 +2463,28 @@ export default function App() {
       [review.restaurantId]: (current[review.restaurantId] || []).map((item) => (item.id === review.id ? updated : item))
     }));
     updateReviewInDb(review.id, { pinned: updated.pinned }).catch(() => {});
+  }
+
+  function removeReview(review) {
+    if (!isAdmin) return;
+    Alert.alert(
+      'Remover avaliacao',
+      'Esta avaliacao deixara de aparecer no app e sera marcada como removida para moderacao.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Remover',
+          style: 'destructive',
+          onPress: () => {
+            setReviewsByRestaurant((current) => ({
+              ...current,
+              [review.restaurantId]: (current[review.restaurantId] || []).filter((item) => item.id !== review.id)
+            }));
+            updateReviewInDb(review.id, { status: 'removed', removedBy: currentUser?.id, removedAt: new Date().toISOString() }).catch(() => {});
+          }
+        }
+      ]
+    );
   }
 
 function markRestaurantKnown(item) {
@@ -3844,6 +3946,7 @@ function postKey(restaurantId, postId) {
         <View style={styles.settingsList}>
           <SettingsActionRow icon="phone-portrait-outline" title="Dispositivos conectados" subtitle="Ver sessao ativa e encerrar acesso local" onPress={() => navigateTo('connectedDevices')} />
           <SettingsActionRow icon="log-out-outline" title="Sair da conta" subtitle="Encerrar a sessao neste aparelho" onPress={logout} />
+          <SettingsActionRow icon="trash-outline" title="Excluir minha conta" subtitle="Remover perfil, favoritos e solicitar exclusao dos dados sincronizados" onPress={deleteCurrentAccount} />
         </View>
       </View>
     );
@@ -4045,6 +4148,10 @@ function postKey(restaurantId, postId) {
     return (
       <View>
         {renderScreenHeader('Termos e privacidade', 'Resumo das regras principais da plataforma.')}
+        <View style={styles.settingsList}>
+          <SettingsActionRow icon="open-outline" title="Politica de privacidade completa" subtitle={privacyPolicyUrl} onPress={() => Linking.openURL(privacyPolicyUrl).catch(() => Alert.alert('Privacidade', 'Nao conseguimos abrir a politica agora.'))} />
+          <SettingsActionRow icon="trash-outline" title="Excluir minha conta" subtitle="Disponivel em Perfil > Configuracoes > Seguranca" onPress={() => navigateTo('security')} />
+        </View>
         {sections.map(([title, text]) => (
           <View key={title} style={styles.pagePanel}>
             <Text style={styles.panelTitle}>{title}</Text>
@@ -4555,6 +4662,9 @@ function postKey(restaurantId, postId) {
       ['Usuários', users.length],
       ['Favoritos', favorites.length]
     ];
+    const localReports = users
+      .flatMap((user) => (user.moderationReports || []).map((report) => ({ ...report, reporter: user.email || user.name || user.id })))
+      .sort((a, b) => String(b.id || '').localeCompare(String(a.id || '')));
     return (
       <View>
         {renderScreenHeader('Central admin', 'Controle e visão geral do aplicativo.')}
@@ -4591,6 +4701,36 @@ function postKey(restaurantId, postId) {
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>Fila vazia</Text>
             <Text style={styles.emptyText}>Novos cadastros pendentes aparecerão aqui.</Text>
+          </View>
+        )}
+        <SectionTitle title="Moderacao de conteudo" />
+        {localReports.length ? localReports.slice(0, 12).map((report) => (
+          <View key={report.id} style={styles.adminListItem}>
+            <View style={styles.adminListTop}>
+              <View style={styles.adminListIcon}>
+                <Ionicons name="flag-outline" size={22} color={colors.redDark} />
+              </View>
+              <View style={styles.adminListCopy}>
+                <Text style={styles.adminListTitle}>{report.targetLabel || report.targetType}</Text>
+                <Text style={styles.adminListMeta}>{report.reason} - {report.reporter}</Text>
+              </View>
+            </View>
+            <View style={styles.ownerActions}>
+              <AppButton kind="secondary" onPress={() => Alert.alert('Moderacao', 'Abra o item denunciado, remova o conteudo se violar as regras e registre o retorno ao usuario pelo suporte.')}>Revisar</AppButton>
+              <AppButton kind="secondary" onPress={() => {
+                const nextUsers = users.map((user) => ({
+                  ...user,
+                  moderationReports: (user.moderationReports || []).filter((item) => item.id !== report.id)
+                }));
+                setUsers(nextUsers);
+                AsyncStorage.setItem(storageKeys.users, JSON.stringify(nextUsers)).catch(() => {});
+              }}>Arquivar</AppButton>
+            </View>
+          </View>
+        )) : (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>Sem denuncias abertas</Text>
+            <Text style={styles.emptyText}>Denuncias de avaliacoes, perfis e publicacoes aparecem aqui para revisao.</Text>
           </View>
         )}
         <SectionTitle title="Restaurantes do app" />
@@ -4834,6 +4974,7 @@ function postKey(restaurantId, postId) {
         onSubmitReview={submitReview}
         onLikeReview={toggleReviewLike}
         onPinReview={toggleReviewPin}
+        onRemoveReview={removeReview}
         onKnown={markRestaurantKnown}
         currentUser={currentUser}
         isAdmin={isAdmin}
@@ -5094,6 +5235,7 @@ function RestaurantModal({
   onSubmitReview,
   onLikeReview,
   onPinReview,
+  onRemoveReview,
   onKnown,
   currentUser,
   isAdmin,
@@ -5349,10 +5491,16 @@ function RestaurantModal({
                           <Text style={styles.reviewActionText}>{review.likes || 0}</Text>
                         </Pressable>
                         {isAdmin ? (
-                          <Pressable onPress={() => onPinReview(review)} style={styles.reviewActionButton}>
-                            <Ionicons name={review.pinned ? 'pin' : 'pin-outline'} size={20} color={colors.ink} />
-                            <Text style={styles.reviewActionText}>{review.pinned ? 'Desfixar' : 'Fixar'}</Text>
-                          </Pressable>
+                          <>
+                            <Pressable onPress={() => onPinReview(review)} style={styles.reviewActionButton}>
+                              <Ionicons name={review.pinned ? 'pin' : 'pin-outline'} size={20} color={colors.ink} />
+                              <Text style={styles.reviewActionText}>{review.pinned ? 'Desfixar' : 'Fixar'}</Text>
+                            </Pressable>
+                            <Pressable onPress={() => onRemoveReview(review)} style={styles.reviewActionButton}>
+                              <Ionicons name="trash-outline" size={20} color={colors.redDark} />
+                              <Text style={styles.reviewActionText}>Remover</Text>
+                            </Pressable>
+                          </>
                         ) : null}
                         <Pressable
                           onPress={() => onReportContent({ type: 'review', id: review.id, label: `avaliacao de ${review.userName || 'visitante'}`, source: 'restaurant-review' })}
