@@ -1079,6 +1079,7 @@ function PartnerMap({
   onLocate,
   favoriteNames = [],
   postCountsByRestaurant = {},
+  onInteractionChange,
   region,
   onRegionChange,
   userLocation,
@@ -1135,6 +1136,7 @@ function PartnerMap({
   }
 
   function finishWebMapPan() {
+    onInteractionChange?.(false);
     if (!dragStartRef.current || (!webPanOffset.x && !webPanOffset.y)) {
       dragStartRef.current = null;
       return;
@@ -1223,6 +1225,9 @@ function PartnerMap({
           showsPointsOfInterest={false}
           toolbarEnabled={false}
           customMapStyle={dineNativeMapStyle}
+          onTouchStart={() => onInteractionChange?.(true)}
+          onTouchEnd={() => onInteractionChange?.(false)}
+          onTouchCancel={() => onInteractionChange?.(false)}
         >
           {restaurants.map((item, index) => (
             <Marker
@@ -1262,7 +1267,10 @@ function PartnerMap({
           style={styles.webMapDragLayer}
           onStartShouldSetResponder={() => true}
           onMoveShouldSetResponder={() => true}
+          onStartShouldSetResponderCapture={() => true}
+          onMoveShouldSetResponderCapture={() => true}
           onResponderGrant={(event) => {
+            onInteractionChange?.(true);
             const point = webMapEventPoint(event);
             dragStartRef.current = { ...point, startOffset: webPanOffset };
           }}
@@ -1425,6 +1433,7 @@ export default function App() {
   const [locationStatus, setLocationStatus] = useState('idle');
   const [locationMessage, setLocationMessage] = useState('Use sua localização para ordenar por distância real.');
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [mapInteracting, setMapInteracting] = useState(false);
   const [ownerRestaurants, setOwnerRestaurants] = useState([]);
   const [pendingRestaurants, setPendingRestaurants] = useState([]);
   const [editingRestaurant, setEditingRestaurant] = useState(null);
@@ -1455,6 +1464,7 @@ export default function App() {
 
   useEffect(() => {
     screenFade.setValue(0);
+    if (tab !== 'Mapa') setMapInteracting(false);
     Animated.timing(screenFade, {
       toValue: 1,
       duration: 180,
@@ -3341,6 +3351,7 @@ function postKey(restaurantId, postId) {
           onLocate={requestUserLocation}
           favoriteNames={favorites}
           postCountsByRestaurant={postCountsByRestaurant}
+          onInteractionChange={setMapInteracting}
           region={mapRegion}
           onRegionChange={handleMapRegionChange}
           userLocation={userLocation}
@@ -5691,6 +5702,7 @@ function postKey(restaurantId, postId) {
       <StatusBar barStyle={appAppearance.statusBar === 'light' ? 'light-content' : 'dark-content'} backgroundColor={appAppearance.bg} />
       <ScrollView
         style={[styles.screen, { backgroundColor: appAppearance.bg }]}
+        scrollEnabled={!mapInteracting}
         contentContainerStyle={[
           styles.screenContent,
           { backgroundColor: appAppearance.bg },
@@ -7581,7 +7593,15 @@ Object.assign(styles, {
   realMapCard: { height: 420, marginHorizontal: -22, backgroundColor: '#EAF0E1', overflow: 'hidden' },
   realMap: { flex: 1 },
   mapCard: { height: 420, marginHorizontal: -22, backgroundColor: '#DCE8D3', overflow: 'hidden' },
-  webMapDragLayer: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, cursor: 'grab' },
+  webMapDragLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+    cursor: 'grab',
+    ...(Platform.OS === 'web' ? { touchAction: 'none', overscrollBehavior: 'contain', userSelect: 'none' } : {})
+  },
   webMapScrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(255, 246, 234, 0.04)' },
   webMapAttribution: { position: 'absolute', right: 8, bottom: 28, zIndex: 4, paddingHorizontal: 6, paddingVertical: 3, backgroundColor: 'rgba(255,255,255,0.86)', color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10 },
   webMapMarker: { position: 'absolute', zIndex: 5, width: 138, minHeight: 68, marginLeft: -69, marginTop: -68, alignItems: 'center' },
@@ -8182,7 +8202,13 @@ Object.assign(styles, {
   feedPickedPhotoWrap: { width: '48%', aspectRatio: 1, borderRadius: 8, overflow: 'hidden', backgroundColor: colors.surface },
   feedPickPhotoCard: { width: '48%', aspectRatio: 1, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(241,61,11,0.42)', backgroundColor: '#FFF4EF', alignItems: 'center', justifyContent: 'center', gap: 5, padding: 10 },
   realMapCard: { height: 560, marginHorizontal: -18, backgroundColor: '#EDF2EA', overflow: 'hidden' },
-  mapCard: { height: 560, marginHorizontal: -18, backgroundColor: '#EDF2EA', overflow: 'hidden' },
+  mapCard: {
+    height: 560,
+    marginHorizontal: -18,
+    backgroundColor: '#EDF2EA',
+    overflow: 'hidden',
+    ...(Platform.OS === 'web' ? { touchAction: 'none', overscrollBehavior: 'contain' } : {})
+  },
   webMapScrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(255,250,244,0.12)' },
   webMapAttribution: { position: 'absolute', right: 8, top: 8, zIndex: 4, paddingHorizontal: 6, paddingVertical: 3, backgroundColor: 'rgba(255,255,255,0.88)', color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9 },
   mapCompass: { position: 'absolute', left: 10, top: 8, zIndex: 4, minHeight: 30, borderRadius: 15, paddingHorizontal: 10, gap: 5, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.9)', borderWidth: 1, borderColor: colors.line },
