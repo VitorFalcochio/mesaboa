@@ -82,40 +82,40 @@ import {
 } from './src/data/appData';
 
 const colors = {
-  bg: '#FFF6EA',
-  surface: '#FFFDF7',
-  cream: '#FFF6EA',
-  red: '#E76F51',
-  redDark: '#C84625',
-  ochre: '#E4A042',
-  olive: '#5E8B5A',
-  teal: '#2A5C7D',
-  ink: '#28282B',
-  text: '#28282B',
-  muted: '#6D6760',
-  card: '#FFFDF7',
-  line: 'rgba(40, 40, 43, 0.12)',
-  softLine: 'rgba(40, 40, 43, 0.07)',
-  green: '#5E8B5A',
-  greenSoft: '#EEF4E7',
-  gold: '#E4A042',
-  orange: '#E76F51',
-  navy: '#28282B',
-  bordeaux: '#C84625',
-  mustard: '#E4A042',
-  pistachio: '#5E8B5A',
-  lavender: '#2A5C7D',
-  coral: '#E76F51'
+  bg: '#FFFDF9',
+  surface: '#FFFFFF',
+  cream: '#FFF7F1',
+  red: '#F24A18',
+  redDark: '#F13D0B',
+  ochre: '#E99A22',
+  olive: '#2E8B57',
+  teal: '#267A78',
+  ink: '#1B1B1B',
+  text: '#1B1B1B',
+  muted: '#6F6A66',
+  card: '#FFFFFF',
+  line: 'rgba(27, 27, 27, 0.12)',
+  softLine: 'rgba(27, 27, 27, 0.07)',
+  green: '#218A4B',
+  greenSoft: '#EAF7EF',
+  gold: '#E99A22',
+  orange: '#F24A18',
+  navy: '#1B1B1B',
+  bordeaux: '#B83250',
+  mustard: '#DFA528',
+  pistachio: '#64A65C',
+  lavender: '#6579A8',
+  coral: '#F06B4F'
 };
 
 const appearancePalettes = {
   light: {
-    bg: '#FFF6EA',
-    surface: '#FFFDF7',
-    nav: 'rgba(255,253,247,0.98)',
-    ink: '#28282B',
-    muted: '#6D6760',
-    line: 'rgba(40, 40, 43, 0.12)',
+    bg: '#FFFDF9',
+    surface: '#FFFFFF',
+    nav: 'rgba(255,255,255,0.98)',
+    ink: '#1B1B1B',
+    muted: '#6F6A66',
+    line: 'rgba(27, 27, 27, 0.12)',
     statusBar: 'dark'
   },
   dark: {
@@ -128,18 +128,18 @@ const appearancePalettes = {
     statusBar: 'light'
   },
   system: {
-    bg: '#F7F0E6',
-    surface: '#FFFDF7',
-    nav: 'rgba(255,253,247,0.98)',
-    ink: '#28282B',
-    muted: '#6D6760',
-    line: 'rgba(40, 40, 43, 0.12)',
+    bg: '#FFFDF9',
+    surface: '#FFFFFF',
+    nav: 'rgba(255,255,255,0.98)',
+    ink: '#1B1B1B',
+    muted: '#6F6A66',
+    line: 'rgba(27, 27, 27, 0.12)',
     statusBar: 'dark'
   }
 };
 
 const accentPalettes = {
-  dine: '#C84625',
+  dine: '#F13D0B',
   olive: '#5E8B5A',
   ocean: '#2A5C7D',
   gold: '#B7791F',
@@ -280,7 +280,7 @@ const settingsCopy = {
   }
 };
 
-const titleFont = Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' });
+const titleFont = 'Nunito_800ExtraBold';
 const bodyFont = 'Nunito_700Bold';
 
 const dineLogo = require('./Designer/Logos/2.png');
@@ -1016,14 +1016,24 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
   const { width } = useWindowDimensions();
   const dragStartRef = useRef(null);
   const [webPanOffset, setWebPanOffset] = useState({ x: 0, y: 0 });
+  const [selectedMapItem, setSelectedMapItem] = useState(null);
   const webMapWidth = Math.max(320, width);
-  const webMapHeight = 420;
+  const webMapHeight = 510;
   const webMapRegion = region || rioPretoRegion;
   const webMapZoomLevel = webMapZoom(webMapRegion);
   const webMapCenterTileX = longitudeToTileX(webMapRegion.longitude, webMapZoomLevel);
   const webMapCenterTileY = latitudeToTileY(webMapRegion.latitude, webMapZoomLevel);
   const webMapCenterPixelX = webMapCenterTileX * webMapTileSize;
   const webMapCenterPixelY = webMapCenterTileY * webMapTileSize;
+  useEffect(() => {
+    if (!restaurants.length) {
+      setSelectedMapItem(null);
+      return;
+    }
+    if (!selectedMapItem || !restaurants.some((item) => item.id === selectedMapItem.id)) {
+      setSelectedMapItem(restaurants[0]);
+    }
+  }, [restaurants, selectedMapItem]);
   const webTiles = [];
   for (let x = Math.floor(webMapCenterTileX) - 2; x <= Math.floor(webMapCenterTileX) + 2; x += 1) {
     for (let y = Math.floor(webMapCenterTileY) - 2; y <= Math.floor(webMapCenterTileY) + 2; y += 1) {
@@ -1069,6 +1079,35 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
     setWebPanOffset({ x: 0, y: 0 });
   }
 
+  function renderSelectedMapCard() {
+    if (!selectedMapItem) return null;
+    const openStatus = getRestaurantOpenStatus(selectedMapItem);
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Abrir restaurante ${selectedMapItem.name}`}
+        onPress={() => onSelect(selectedMapItem)}
+        style={styles.selectedMapCard}
+      >
+        <Image source={imageSource(selectedMapItem.coverPhoto || selectedMapItem.image || selectedMapItem.logo)} style={styles.selectedMapImage} />
+        <View style={styles.selectedMapCopy}>
+          <Text numberOfLines={1} style={styles.selectedMapName}>{selectedMapItem.name}</Text>
+          <Text numberOfLines={1} style={styles.selectedMapMeta}>
+            {selectedMapItem.type} • {formatDistance(selectedMapItem.distanceKm)}
+          </Text>
+          <View style={styles.selectedMapStatusRow}>
+            <Ionicons name="star" size={13} color={colors.gold} />
+            <Text style={styles.selectedMapRating}>{scoreValue(selectedMapItem).toFixed(1)}</Text>
+            <Text style={[styles.selectedMapStatus, openStatus.open && styles.selectedMapStatusOpen]}>{openStatus.label}</Text>
+          </View>
+        </View>
+        <View style={styles.selectedMapRoute}>
+          <Ionicons name="navigate-outline" size={18} color="#FFFFFF" />
+        </View>
+      </Pressable>
+    );
+  }
+
   if (MapView && Marker) {
     return (
       <View style={styles.realMapCard}>
@@ -1094,11 +1133,12 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
               coordinate={item.coordinate || coordinateForRestaurant(item, index)}
               title={item.name}
               description={`${item.type} - ${item.district}${Number.isFinite(item.distanceKm) ? ` • ${formatDistance(item.distanceKm)}` : ''}`}
-              pinColor={index === 2 ? colors.olive : colors.redDark}
-              onPress={() => onSelect(item)}
+              pinColor={colors.redDark}
+              onPress={() => setSelectedMapItem(item)}
             />
           ))}
         </MapView>
+        {renderSelectedMapCard()}
       </View>
     );
   }
@@ -1153,17 +1193,12 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
             <Pressable
               key={item.id}
               accessibilityRole="button"
-              accessibilityLabel={`Abrir restaurante ${item.name}`}
-              onPress={() => onSelect(item)}
+              accessibilityLabel={`Selecionar restaurante ${item.name}`}
+              onPress={() => setSelectedMapItem(item)}
               style={[styles.webMapMarker, { left: point.left, top: point.top }]}
             >
-              <View style={styles.webMapMarkerStem} />
-              <View style={styles.webMapMarkerCard}>
-                <Text numberOfLines={1} style={styles.mapPinName}>{item.name}</Text>
-                <Text numberOfLines={1} style={styles.mapPinMeta}>{Number.isFinite(item.distanceKm) ? formatDistance(item.distanceKm) : item.type}</Text>
-              </View>
-              <View style={[styles.webMapMarkerDot, index === 2 && styles.webMapMarkerDotAlt]}>
-                <MaterialCommunityIcons name="silverware-fork-knife" size={15} color={colors.card} />
+              <View style={[styles.webMapMarkerDot, selectedMapItem?.id === item.id && styles.webMapMarkerDotSelected]}>
+                <Text style={styles.webMapMarkerLetter}>d</Text>
               </View>
             </Pressable>
           );
@@ -1179,6 +1214,7 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
             ]}
           />
         ) : null}
+        {renderSelectedMapCard()}
         <Text style={styles.webMapAttribution}>Map data: OpenStreetMap</Text>
       </View>
     );
@@ -2904,153 +2940,137 @@ function postKey(restaurantId, postId) {
 }
 
   function renderHome() {
+    const discoveryCategories = [
+      ['Sushi', 'sushi', 'https://images.unsplash.com/photo-1579871494447-9811cf80d66c?auto=format&fit=crop&w=400&q=84'],
+      ['Pizza', 'pizza', 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?auto=format&fit=crop&w=400&q=84'],
+      ['Hambúrguer', 'hamburg', 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=400&q=84'],
+      ['Brasileira', 'brasileir', 'https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=400&q=84'],
+      ['Cafés', 'caf', 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=400&q=84']
+    ];
+    const featuredRestaurant = discoveryRestaurants[homeDiscoveryIndex % Math.max(1, discoveryRestaurants.length)] || topRestaurants[0];
+    const nearbyRestaurants = topRestaurants.slice(1, 6);
+    const newRestaurants = [...publicRestaurants]
+      .sort((a, b) => Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0))
+      .slice(0, 4);
+
     return (
-      <>
-        <View style={styles.header}>
-          <View style={styles.topRow}>
-            <View style={styles.brandLockup}>
-              <BrandLogo />
-            </View>
-            <Pressable accessibilityRole="button" accessibilityLabel="Abrir notificações" hitSlop={8} onPress={openNotifications} style={({ pressed }) => [styles.iconButton, pressed && styles.activePress]}>
-              <Ionicons name="notifications-outline" size={23} color={colors.ink} />
+      <View style={styles.discoveryPage}>
+        <View style={styles.discoveryTopBar}>
+          <BrandLogo />
+          <View style={styles.discoveryTopActions}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Abrir notificações" hitSlop={8} onPress={openNotifications} style={({ pressed }) => [styles.discoveryIconButton, pressed && styles.activePress]}>
+              <Ionicons name="notifications-outline" size={24} color={colors.ink} />
+              <View style={styles.discoveryNotificationDot} />
+            </Pressable>
+            <Pressable onPress={() => setTab('Perfil')} style={styles.discoveryAvatar}>
+              {currentUser?.photo ? <Image source={imageSource(currentUser.photo)} style={styles.discoveryAvatarImage} /> : <Text style={styles.discoveryAvatarText}>{(currentUser?.name || 'D').slice(0, 1).toUpperCase()}</Text>}
             </Pressable>
           </View>
-          <Pressable accessibilityRole="button" accessibilityLabel="Selecionar cidade ou região" hitSlop={6} onPress={openLocationPicker} style={({ pressed }) => [styles.locationRow, pressed && styles.activePress]}>
-            <Ionicons name="location" size={18} color={colors.redDark} />
-            <Text style={styles.locationText}>São José do Rio Preto</Text>
-            <Ionicons name="chevron-down" size={16} color={colors.ink} />
+        </View>
+
+        <View style={styles.discoveryHeadingRow}>
+          <Text style={styles.discoveryTitle}>Descobrir</Text>
+          <Pressable onPress={openLocationPicker} style={styles.discoveryLocation}>
+            <Ionicons name="location" size={15} color={colors.redDark} />
+            <Text numberOfLines={1} style={styles.discoveryLocationText}>{selectedArea || 'São José do Rio Preto'}</Text>
+            <Ionicons name="chevron-down" size={14} color={colors.muted} />
           </Pressable>
         </View>
 
-        <View style={styles.searchBar}>
-          <Ionicons name="search-outline" size={25} color={colors.ink} />
+        <View style={styles.discoverySearch}>
+          <Ionicons name="search-outline" size={21} color={colors.muted} />
           <TextInput
             value={query}
             onChangeText={setQuery}
             onSubmitEditing={() => navigateTo('results')}
-            placeholder="Buscar restaurantes, cafés, bares..."
+            placeholder="O que você quer comer?"
             placeholderTextColor="#918d86"
-            style={styles.searchInput}
+            style={styles.discoverySearchInput}
           />
-          <Pressable accessibilityRole="button" accessibilityLabel="Abrir resultados de busca" hitSlop={6} onPress={() => navigateTo('results')} style={({ pressed }) => [styles.searchAction, pressed && styles.activePress]}>
-            <Ionicons name="options-outline" size={21} color={colors.ink} />
+          <Pressable accessibilityRole="button" accessibilityLabel="Abrir filtros" hitSlop={6} onPress={() => { setFiltersOpen(true); setTab('Mapa'); }} style={({ pressed }) => [styles.discoveryFilterButton, pressed && styles.activePress]}>
+            <Ionicons name="options-outline" size={20} color={colors.ink} />
           </Pressable>
         </View>
 
-        {discoveryRestaurants.length ? (
-          <View style={styles.homeDiscoveryHeroCard}>
-            <ScrollView
-              ref={homeDiscoveryScrollRef}
-              horizontal
-              pagingEnabled
-              nestedScrollEnabled
-              decelerationRate="fast"
-              showsHorizontalScrollIndicator={false}
-              snapToInterval={homeDiscoveryCardWidth}
-              snapToAlignment="start"
-              scrollEventThrottle={16}
-              onScroll={(event) => {
-                const nextIndex = Math.round(event.nativeEvent.contentOffset.x / homeDiscoveryCardWidth);
-                setHomeDiscoveryIndex((current) => {
-                  const safeIndex = nextIndex % discoveryRestaurants.length;
-                  return current % discoveryRestaurants.length === safeIndex ? current : safeIndex;
-                });
-              }}
-              onMomentumScrollEnd={(event) => {
-                const nextIndex = Math.round(event.nativeEvent.contentOffset.x / homeDiscoveryCardWidth);
-                setHomeDiscoveryIndex(nextIndex % discoveryRestaurants.length);
-              }}
-              style={styles.homeDiscoveryPager}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoveryCategoryRow}>
+          {discoveryCategories.map(([label, term, fallbackImage]) => {
+            const match = publicRestaurants.find((item) => normalize(`${item.name} ${item.type} ${item.tags || ''}`).includes(term));
+            return (
+            <Pressable
+              key={label}
+              onPress={() => navigateTo('results', { title: label, trendTerms: [term] })}
+              style={({ pressed }) => [styles.discoveryCategory, pressed && styles.pressed]}
             >
-              {discoveryRestaurants.map((restaurant) => (
-                <Pressable
-                  key={restaurant.id}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Conhecer ${restaurant.name}`}
-                  onPress={() => setSelectedRestaurant(restaurant)}
-                  style={({ pressed }) => [styles.homeDiscoverySlide, { width: homeDiscoveryCardWidth }, pressed && styles.pressed]}
-                >
-                  <Animated.View
-                    style={[
-                      styles.homeDiscoveryAnimatedContent,
-                      {
-                        opacity: homeDiscoveryAnim.interpolate({ inputRange: [0, 1], outputRange: [0.94, 1] }),
-                        transform: [{ scale: homeDiscoveryAnim.interpolate({ inputRange: [0, 1], outputRange: [1.008, 1] }) }]
-                      }
-                    ]}
-                  >
-                    <Image source={imageSource(restaurant.coverPhoto || restaurant.image || restaurant.logo)} style={styles.homeDiscoveryImage} />
-                    <View style={styles.homeDiscoveryScrim} />
-                    <View style={styles.homeDiscoveryLogoWrap}>
-                      <Image source={imageSource(restaurant.logo || restaurant.image)} style={styles.homeDiscoveryLogo} />
-                    </View>
-                    <View style={styles.homeDiscoveryCopy}>
-                      <Text style={styles.homeDiscoveryName} numberOfLines={1}>{restaurant.name}</Text>
-                      <Text style={styles.homeDiscoveryMeta} numberOfLines={1}>{restaurant.type} • {restaurant.district}</Text>
-                    </View>
-                  </Animated.View>
-                </Pressable>
-              ))}
-            </ScrollView>
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.homeDiscoverySheen,
-                {
-                  opacity: homeDiscoverySheen.interpolate({ inputRange: [0, 0.25, 0.8, 1], outputRange: [0, 0.22, 0.06, 0] }),
-                  transform: [
-                    { translateX: homeDiscoverySheen.interpolate({ inputRange: [0, 1], outputRange: [-homeDiscoveryCardWidth * 0.55, homeDiscoveryCardWidth * 0.9] }) },
-                    { rotate: '16deg' }
-                  ]
-                }
-              ]}
-            />
-            <View style={styles.homeDiscoveryDots}>
-              {discoveryRestaurants.map((restaurant, index) => (
-                <View key={restaurant.id} style={[styles.homeDiscoveryDot, index === (homeDiscoveryIndex % discoveryRestaurants.length) && styles.homeDiscoveryDotActive]} />
-              ))}
+              <Image source={{ uri: fallbackImage }} style={styles.discoveryCategoryImage} />
+              <Text style={styles.discoveryCategoryLabel}>{label}</Text>
+            </Pressable>
+            );
+          })}
+        </ScrollView>
+
+        <SectionTitle title="Perto de você" action="Ver tudo" onPress={() => navigateTo('results', { title: 'Perto de você' })} />
+        {featuredRestaurant ? (
+          <Pressable onPress={() => setSelectedRestaurant(featuredRestaurant)} style={({ pressed }) => [styles.discoveryFeatureCard, pressed && styles.pressed]}>
+            <Image source={imageSource(featuredRestaurant.coverPhoto || featuredRestaurant.image || featuredRestaurant.logo)} style={styles.discoveryFeatureImage} />
+            <View style={styles.discoveryFeatureScrim} />
+            <Pressable onPress={(event) => { event?.stopPropagation?.(); toggleFavorite(featuredRestaurant.name); }} style={styles.discoverySaveButton}>
+              <Ionicons name={favorites.includes(featuredRestaurant.name) ? 'bookmark' : 'bookmark-outline'} size={22} color="#FFFFFF" />
+            </Pressable>
+            <View style={styles.discoveryFeatureCopy}>
+              <Text numberOfLines={1} style={styles.discoveryFeatureName}>{featuredRestaurant.name}</Text>
+              <View style={styles.discoveryFeatureMetaRow}>
+                <Text numberOfLines={1} style={styles.discoveryFeatureMeta}>{featuredRestaurant.type} • {formatDistance(featuredRestaurant.distanceKm)}</Text>
+                <View style={styles.discoveryFeatureRating}>
+                  <Ionicons name="star" size={13} color="#FFC24B" />
+                  <Text style={styles.discoveryFeatureRatingText}>{scoreValue(featuredRestaurant).toFixed(1)}</Text>
+                </View>
+              </View>
             </View>
-          </View>
+          </Pressable>
         ) : null}
 
-        <SectionTitle title="Explorar" />
-        <View style={styles.trendingCategoryGrid}>
-          {trendingCategoryTiles.map((group) => (
-            <Pressable
-              key={group.title}
-              onPress={() => navigateTo('results', group.more ? { title: 'Em alta agora' } : { title: group.title, trendTerms: group.terms })}
-              style={({ pressed }) => [styles.trendingCategoryTile, pressed && styles.pressed]}
-            >
-              <View style={styles.trendingCategoryIcon}>
-                <Ionicons name={group.icon} size={30} color={group.more ? colors.muted : colors.redDark} />
-              </View>
-              <Text style={styles.trendingCategoryTitle} numberOfLines={2}>{group.title}</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoveryNearbyRow}>
+          {nearbyRestaurants.map((item) => (
+            <Pressable key={item.id} onPress={() => setSelectedRestaurant(item)} style={styles.discoveryNearbyCard}>
+              <Image source={imageSource(item.coverPhoto || item.image || item.logo)} style={styles.discoveryNearbyImage} />
+              <Text numberOfLines={1} style={styles.discoveryNearbyName}>{item.name}</Text>
+              <Text numberOfLines={1} style={styles.discoveryNearbyMeta}>{item.type} • {formatDistance(item.distanceKm)}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+
+        <SectionTitle title="Novidades" action="Ver tudo" onPress={() => navigateTo('results', { title: 'Novidades' })} />
+        <View style={styles.discoveryNewsGrid}>
+          {newRestaurants.map((item) => (
+            <Pressable key={item.id} onPress={() => setSelectedRestaurant(item)} style={styles.discoveryNewsCard}>
+              <Image source={imageSource(item.coverPhoto || item.image || item.logo)} style={styles.discoveryNewsImage} />
+              <Text numberOfLines={1} style={styles.discoveryNewsName}>{item.name}</Text>
+              <Text numberOfLines={1} style={styles.discoveryNewsMeta}>{item.district}</Text>
             </Pressable>
           ))}
         </View>
-
-        <SectionTitle title="Vale salvar" />
-        <View style={styles.listStack}>
-          {topRestaurants.slice(0, homeRestaurantSectionLimit).map((item) => <MiniRestaurant key={item.id} item={item} onPress={setSelectedRestaurant} />)}
-        </View>
-      </>
+      </View>
     );
   }
 
   function renderSearch() {
     return (
-      <View>
-        <View style={styles.header}>
-          <View style={styles.topRow}>
-            <View style={styles.brandLockup}><BrandLogo /></View>
-            <Pressable onPress={openNotifications} style={styles.iconButton}>
-              <Ionicons name="notifications-outline" size={23} color={colors.ink} />
+      <View style={styles.mapPage}>
+        <View style={styles.mapTopBar}>
+          <BrandLogo />
+          <Text style={styles.mapPageTitle}>Mapa</Text>
+          <View style={styles.mapTopActions}>
+            <Pressable onPress={requestUserLocation} style={styles.mapTopButton}>
+              <Ionicons name="locate-outline" size={22} color={colors.ink} />
+            </Pressable>
+            <Pressable onPress={() => setFiltersOpen((value) => !value)} style={styles.mapTopButton}>
+              <Ionicons name="options-outline" size={22} color={colors.ink} />
             </Pressable>
           </View>
         </View>
         <View style={styles.searchPageField}>
-          <Ionicons name="search-outline" size={24} color={colors.ink} />
-          <TextInput value={query} onChangeText={setQuery} placeholder="Buscar por bairro, cozinha ou nome" placeholderTextColor="#8A8179" style={styles.pageInput} />
+          <Ionicons name="search-outline" size={21} color={colors.muted} />
+          <TextInput value={query} onChangeText={setQuery} placeholder="Buscar nesta área" placeholderTextColor="#8A8179" style={styles.pageInput} />
           <Pressable accessibilityRole="button" accessibilityState={{ expanded: filtersOpen }} accessibilityLabel="Abrir filtros de busca" hitSlop={6} onPress={() => setFiltersOpen((value) => !value)} style={[styles.searchFilterButton, filtersOpen && styles.searchFilterButtonActive]}>
             <Ionicons name="options-outline" size={22} color={filtersOpen ? colors.card : colors.ink} />
           </Pressable>
@@ -3117,6 +3137,22 @@ function postKey(restaurantId, postId) {
             </View>
           </View>
         ) : null}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mapQuickFilters}>
+          {[
+            ['Até 1 km', null],
+            ['Aberto agora', 'Aberto agora'],
+            ['4,5+', '4,5+'],
+            ['Reserva', 'Reserva']
+          ].map(([label, value]) => (
+            <Pressable
+              key={label}
+              onPress={() => value ? setSelectedCategory(selectedCategory === value ? '' : value) : setRadiusKm(1)}
+              style={[styles.mapQuickFilter, (value ? selectedCategory === value : radiusKm === 1) && styles.mapQuickFilterActive]}
+            >
+              <Text style={[styles.mapQuickFilterText, (value ? selectedCategory === value : radiusKm === 1) && styles.mapQuickFilterTextActive]}>{label}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
         <PartnerMap
           restaurants={filteredRestaurants.slice(0, 12)}
           onSelect={setSelectedRestaurant}
@@ -3168,7 +3204,7 @@ function postKey(restaurantId, postId) {
     const likes = Number(post.likes || 0) + (state.liked ? 1 : 0);
     const reposts = Number(post.reposts || 0) + (state.reposted ? 1 : 0);
     const images = (post.images?.length ? post.images : [post.image]).filter(Boolean).slice(0, 4);
-    const imageSize = Math.max(280, width);
+    const imageSize = Math.max(280, Math.min(width, 560));
     const activePhoto = feedPhotoIndexes[post.id] || 0;
     return (
       <View key={post.id} style={styles.feedPostCard}>
@@ -3225,30 +3261,27 @@ function postKey(restaurantId, postId) {
         </View>
 
         <View style={styles.feedPostBody}>
-          <Pressable accessibilityRole="button" accessibilityLabel={`Ver detalhes da publicacao de ${post.author}`} onPress={() => openFeedPost(post)}>
-            <Text style={styles.feedPostTitle}>{post.title}</Text>
-            <Text style={styles.feedCaption}>{post.caption}</Text>
-          </Pressable>
           <View style={styles.feedActionsRow}>
             <Pressable onPress={() => toggleFeedFlag(post.id, 'liked')} style={styles.feedActionButton}>
               <Ionicons name={state.liked ? 'heart' : 'heart-outline'} size={22} color={state.liked ? colors.redDark : colors.ink} />
-              <Text style={styles.feedActionText}>{likes}</Text>
             </Pressable>
             <Pressable onPress={() => toggleFeedFlag(post.id, 'commenting')} style={styles.feedActionButton}>
               <Ionicons name="chatbubble-outline" size={21} color={colors.ink} />
-              <Text style={styles.feedActionText}>{comments.length}</Text>
             </Pressable>
             <Pressable onPress={() => shareFeedPost(post)} style={styles.feedActionButton}>
-              <Ionicons name="share-social-outline" size={21} color={colors.ink} />
-            </Pressable>
-            <Pressable onPress={() => toggleFeedFlag(post.id, 'saved')} style={styles.feedActionButton}>
-              <Ionicons name={state.saved ? 'bookmark' : 'bookmark-outline'} size={21} color={state.saved ? colors.redDark : colors.ink} />
+              <Ionicons name="paper-plane-outline" size={21} color={colors.ink} />
             </Pressable>
             <Pressable onPress={() => toggleFeedFlag(post.id, 'reposted')} style={styles.feedActionButton}>
-              <Ionicons name="repeat-outline" size={21} color={state.reposted ? colors.redDark : colors.ink} />
-              <Text style={styles.feedActionText}>{reposts}</Text>
+              <Ionicons name="repeat-outline" size={22} color={state.reposted ? colors.redDark : colors.ink} />
+            </Pressable>
+            <Pressable onPress={() => toggleFeedFlag(post.id, 'saved')} style={[styles.feedActionButton, styles.feedSaveAction]}>
+              <Ionicons name={state.saved ? 'bookmark' : 'bookmark-outline'} size={21} color={state.saved ? colors.redDark : colors.ink} />
             </Pressable>
           </View>
+          <Text style={styles.feedLikesText}>{likes} curtidas{reposts ? ` • ${reposts} republicações` : ''}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Ver detalhes da publicacao de ${post.author}`} onPress={() => openFeedPost(post)}>
+            <Text style={styles.feedCaption}><Text style={styles.feedCaptionAuthor}>{post.author} </Text>{post.caption || post.title}</Text>
+          </Pressable>
 
           <View style={styles.feedComments}>
             {comments.slice(0, 3).map((comment) => (
@@ -3279,19 +3312,24 @@ function postKey(restaurantId, postId) {
 
   function renderFeed() {
     return (
-      <View>
-        <View style={[styles.header, styles.feedHeaderInset]}>
-          <View style={styles.topRow}>
-            <View style={styles.brandLockup}><BrandLogo /></View>
-            <Pressable onPress={openNotifications} style={styles.iconButton}>
-              <Ionicons name="notifications-outline" size={23} color={colors.ink} />
+      <View style={styles.socialFeedPage}>
+        <View style={styles.socialFeedHeader}>
+          <View style={styles.socialFeedTopBar}>
+            <BrandLogo />
+            <Pressable onPress={openNotifications} style={styles.discoveryIconButton}>
+              <Ionicons name="notifications-outline" size={24} color={colors.ink} />
+              <View style={styles.discoveryNotificationDot} />
             </Pressable>
           </View>
-          <Pressable onPress={openLocationPicker} style={styles.locationRow}>
-            <Ionicons name="location" size={18} color={colors.redDark} />
-            <Text style={styles.locationText}>São José do Rio Preto</Text>
-            <Ionicons name="chevron-down" size={16} color={colors.ink} />
-          </Pressable>
+          <Text style={styles.socialFeedTitle}>Feed</Text>
+          <View style={styles.socialFeedTabs}>
+            <View style={styles.socialFeedTabActive}>
+              <Text style={styles.socialFeedTabActiveText}>Para você</Text>
+            </View>
+            <Pressable style={styles.socialFeedTab}>
+              <Text style={styles.socialFeedTabText}>Seguindo</Text>
+            </Pressable>
+          </View>
         </View>
         <View style={styles.feedComposerCard}>
           <View style={styles.feedComposerAvatar}>
@@ -3302,8 +3340,7 @@ function postKey(restaurantId, postId) {
             )}
           </View>
           <View style={styles.feedComposerCopy}>
-            <Text style={styles.feedComposerTitle}>Compartilhe uma experiência</Text>
-            <Text style={styles.feedComposerText}>Poste foto, texto curto e marque um restaurante.</Text>
+            <Text style={styles.feedComposerTitle}>Compartilhe uma descoberta</Text>
           </View>
           <Pressable onPress={openFeedComposer} style={styles.feedComposerButton}>
             <Ionicons name="add" size={20} color={colors.card} />
@@ -3385,15 +3422,41 @@ function postKey(restaurantId, postId) {
 
   function renderFavorites() {
     return (
-      <View>
-        <View style={styles.header}>
-          <View style={styles.topRow}>
-            <View style={styles.brandLockup}><BrandLogo /></View>
-            <Pressable onPress={openNotifications} style={styles.iconButton}>
-              <Ionicons name="notifications-outline" size={23} color={colors.ink} />
+      <View style={styles.savedPage}>
+        <View style={styles.savedTopBar}>
+          <Pressable onPress={goBack} style={styles.savedTopButton}>
+            <Ionicons name="chevron-back" size={23} color={colors.ink} />
+          </Pressable>
+          <Text style={styles.savedTitle}>Salvos</Text>
+          <View style={styles.savedTopActions}>
+            <Pressable onPress={() => navigateTo('rankings')} style={styles.savedTopButton}>
+              <Ionicons name="search-outline" size={22} color={colors.ink} />
+            </Pressable>
+            <Pressable onPress={() => navigateTo('rankings')} style={styles.savedTopButton}>
+              <Ionicons name="options-outline" size={22} color={colors.ink} />
             </Pressable>
           </View>
         </View>
+
+        <SectionTitle title="Minhas coleções" action="Criar coleção" onPress={() => navigateTo('rankings')} />
+        <View style={styles.savedCollectionList}>
+          {collectionCurations.slice(0, 4).map((collection, index) => (
+            <Pressable key={collection.title} onPress={() => navigateTo('collectionDetail', { title: collection.title })} style={styles.savedCollectionCard}>
+              <Image source={{ uri: collection.image }} style={styles.savedCollectionImage} />
+              <View style={styles.savedCollectionCopy}>
+                <Text numberOfLines={1} style={styles.savedCollectionName}>{index === 0 && favorites.length ? 'Favoritos' : collection.title}</Text>
+                <Text style={styles.savedCollectionCount}>{index === 0 ? favorites.length : getCollectionRestaurants(publicRestaurants, collection).length} itens</Text>
+                <View style={styles.savedCollectionPrivacy}>
+                  <Ionicons name={index % 2 ? 'lock-closed-outline' : 'globe-outline'} size={12} color={colors.muted} />
+                  <Text style={styles.savedCollectionPrivacyText}>{index % 2 ? 'Privada' : 'Pública'}</Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={21} color={colors.muted} />
+            </Pressable>
+          ))}
+        </View>
+
+        <SectionTitle title="Lugares salvos" />
         <View style={styles.segmented}>
           {['Salvos', 'Quero conhecer', 'Já fui'].map((item) => (
             <Pressable key={item} onPress={() => setFavoriteSegment(item)} style={[styles.segment, favoriteSegment === item && styles.segmentActive]}>
@@ -3410,15 +3473,6 @@ function postKey(restaurantId, postId) {
               <Text style={styles.emptyText}>Salve restaurantes para construir sua lista pessoal.</Text>
             </View>
           )}
-        </View>
-        <View style={styles.promoCard}>
-          <View style={styles.promoCopy}>
-            <Text style={styles.promoTitle}>Date night perfeito</Text>
-            <Text style={styles.promoText}>Ambientes especiais para momentos inesquecíveis.</Text>
-          </View>
-          <Pressable onPress={() => setTab('Feed')} style={styles.promoButton}>
-            <Text style={styles.promoButtonText}>Ver lista completa</Text>
-          </Pressable>
         </View>
       </View>
     );
@@ -3600,6 +3654,9 @@ function postKey(restaurantId, postId) {
           <Text style={styles.dineProfileTopTitle}>Perfil</Text>
           <Text style={styles.dineProfileLogo}>Dine</Text>
           <View style={styles.dineProfileTopActions}>
+            <Pressable accessibilityLabel="Abrir salvos" onPress={() => navigateTo('favorites')} style={styles.dineProfileTopButton}>
+              <Ionicons name="bookmark-outline" size={25} color={colors.ink} />
+            </Pressable>
             <Pressable onPress={openNotifications} style={styles.dineProfileTopButton}>
               <Ionicons name="notifications-outline" size={26} color={colors.ink} />
               <View style={styles.dineProfileBellDot} />
@@ -3770,6 +3827,11 @@ function postKey(restaurantId, postId) {
     const earned = earnedAchievements(gamification);
     const visibleBadges = achievementRules.slice(0, 5);
     const reviewTotal = Math.max(userReviews.length, gamification.metrics.reviews || 0);
+    const authoredPosts = feedPosts.filter((post) => currentUser?.id && String(post.authorId) === String(currentUser.id));
+    const profileMedia = [
+      ...authoredPosts.map((post) => ({ id: post.id, image: post.images?.[0] || post.image, post })),
+      ...profileReviews.map((review) => ({ id: `review-${review.id}`, image: review.image, restaurant: review.restaurant }))
+    ].filter((item) => item.image).slice(0, 9);
     const nextMeta = rank.next
       ? `${formatCompactCount(gamification.points)} / ${formatCompactCount(rank.next.minPoints)} pts para o próximo nível`
       : `${formatCompactCount(gamification.points)} pts no nível máximo`;
@@ -3780,6 +3842,9 @@ function postKey(restaurantId, postId) {
           <Text style={styles.dineProfileTopTitle}>Perfil</Text>
           <Text style={styles.dineProfileLogo}>Dine</Text>
           <View style={styles.dineProfileTopActions}>
+            <Pressable accessibilityLabel="Abrir salvos" onPress={() => navigateTo('favorites')} style={styles.dineProfileTopButton}>
+              <Ionicons name="bookmark-outline" size={25} color={colors.ink} />
+            </Pressable>
             <Pressable onPress={openNotifications} style={styles.dineProfileTopButton}>
               <Ionicons name="notifications-outline" size={26} color={colors.ink} />
               <View style={styles.dineProfileBellDot} />
@@ -3851,19 +3916,58 @@ function postKey(restaurantId, postId) {
 
         <View style={styles.dineProfileStatsCard}>
           {[
-            ['star-outline', String(reviewTotal), 'Avaliações'],
-            ['heart', String(favorites.length), 'Favoritos'],
-            ['map-outline', String(gamification.metrics.known || 0), 'Lugares\nconhecidos'],
-            ['trophy-outline', formatCompactCount(gamification.points), 'Pontos']
-          ].map(([icon, value, label], index) => (
+            [String(authoredPosts.length), 'publicações'],
+            [String(Math.max(favorites.length, gamification.metrics.known || 0)), 'lugares'],
+            [formatCompactCount(Number(currentUser?.followers || 0)), 'seguidores']
+          ].map(([value, label], index) => (
             <View key={label} style={[styles.dineProfileStatItem, index > 0 && styles.dineProfileStatDivider]}>
-              <Ionicons name={icon} size={28} color={index === 1 ? colors.redDark : colors.ochre} />
               <Text style={styles.dineProfileStatValue}>{value}</Text>
               <Text style={styles.dineProfileStatLabel}>{label}</Text>
             </View>
           ))}
         </View>
 
+        <View style={styles.profilePrimaryActions}>
+          <Pressable onPress={saveProfileInstagram} style={styles.profileEditAction}>
+            <Text style={styles.profileEditActionText}>Editar perfil</Text>
+          </Pressable>
+          <Pressable onPress={() => navigateTo('favorites')} style={styles.profileSavedAction}>
+            <Ionicons name="bookmark-outline" size={18} color={colors.ink} />
+            <Text style={styles.profileSavedActionText}>Salvos</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.profileContentTabs}>
+          <View style={styles.profileContentTabActive}>
+            <Ionicons name="grid-outline" size={17} color={colors.redDark} />
+            <Text style={styles.profileContentTabActiveText}>Publicações</Text>
+          </View>
+          <Pressable onPress={() => navigateTo('favorites')} style={styles.profileContentTab}>
+            <Ionicons name="location-outline" size={17} color={colors.muted} />
+            <Text style={styles.profileContentTabText}>Lugares</Text>
+          </Pressable>
+        </View>
+        {profileMedia.length ? (
+          <View style={styles.profileMediaGrid}>
+            {profileMedia.map((item) => (
+              <Pressable
+                key={item.id}
+                onPress={() => item.post ? openFeedPost(item.post) : item.restaurant ? setSelectedRestaurant(item.restaurant) : null}
+                style={styles.profileMediaTile}
+              >
+                <Image source={imageSource(item.image)} style={styles.profileMediaImage} />
+              </Pressable>
+            ))}
+          </View>
+        ) : (
+          <Pressable onPress={openFeedComposer} style={styles.profileEmptyMedia}>
+            <Ionicons name="camera-outline" size={25} color={colors.redDark} />
+            <Text style={styles.profileEmptyMediaTitle}>Compartilhe sua primeira descoberta</Text>
+            <Text style={styles.profileEmptyMediaText}>Suas publicações e avaliações aparecerão aqui.</Text>
+          </Pressable>
+        )}
+
+        <Text style={styles.profileJourneyTitle}>Sua jornada no Dine</Text>
         <View style={styles.dineProfileLevelCard}>
           <View style={styles.dineProfileMedal}>
             <MaterialCommunityIcons name="silverware-fork-knife" size={42} color="#F8D9AA" />
@@ -4131,9 +4235,39 @@ function postKey(restaurantId, postId) {
       ['people-outline', 'Convites', 'Amigos entrando pelo seu link.', 'invites'],
       ['gift-outline', 'Ofertas Dine+', 'Beneficios, eventos e experiencias.', 'offers']
     ];
+    const activityItems = feedPosts.slice(0, 6);
     return (
-      <View>
-        {renderScreenHeader('Notificacoes', 'Escolha o que pode chamar sua atencao.')}
+      <View style={styles.activityPage}>
+        {renderScreenHeader('Atividade')}
+        <View style={styles.activityTabs}>
+          {['Todas', 'Social', 'Lugares'].map((label, index) => (
+            <View key={label} style={[styles.activityTab, index === 0 && styles.activityTabActive]}>
+              <Text style={[styles.activityTabText, index === 0 && styles.activityTabTextActive]}>{label}</Text>
+            </View>
+          ))}
+        </View>
+        <Text style={styles.activityGroupTitle}>Hoje</Text>
+        <View style={styles.activityList}>
+          {activityItems.length ? activityItems.map((post, index) => (
+            <Pressable key={post.id} onPress={() => openFeedPost(post)} style={styles.activityItem}>
+              <View style={styles.activityAvatar}>
+                {post.avatar ? <Image source={imageSource(post.avatar)} style={styles.activityAvatarImage} /> : <Text style={styles.activityAvatarText}>{String(post.author || 'D').slice(0, 1).toUpperCase()}</Text>}
+              </View>
+              <View style={styles.activityCopy}>
+                <Text style={styles.activityText}><Text style={styles.activityAuthor}>{post.author || 'Dine'} </Text>{index % 2 ? 'publicou uma nova descoberta.' : 'marcou um lugar que pode interessar você.'}</Text>
+                <Text style={styles.activityTime}>{formatPostDate(post.createdAt)}</Text>
+              </View>
+              <Image source={imageSource(post.images?.[0] || post.image)} style={styles.activityThumb} />
+              {index < 3 ? <View style={styles.activityUnread} /> : null}
+            </Pressable>
+          )) : (
+            <View style={styles.activityEmpty}>
+              <Text style={styles.activityEmptyText}>As novidades da sua comunidade aparecerão aqui.</Text>
+            </View>
+          )}
+        </View>
+
+        <SectionTitle title="Preferências de notificações" />
         <View style={styles.pagePanel}>
           <Text style={styles.panelTitle}>Push no aparelho</Text>
           <Text style={styles.panelText}>
@@ -5264,6 +5398,8 @@ function postKey(restaurantId, postId) {
       about: renderAboutScreen,
       settings: renderSettingsScreen,
       invites: renderTrackedInvitesScreen,
+      favorites: renderFavorites,
+      rankings: renderRankings,
       feedProfile: renderFeedProfileScreen,
       dinePlus: renderDinePlusScreen,
       results: renderResultsScreen,
@@ -5629,7 +5765,7 @@ function RestaurantModal({
   onFavorite,
   onReportContent
 }) {
-  const [activeDetailTab, setActiveDetailTab] = useState('Sobre');
+  const [activeDetailTab, setActiveDetailTab] = useState('Cardápio');
   const [expandedMenuItem, setExpandedMenuItem] = useState(null);
   useEffect(() => {
     if (item?.id) recordRestaurantMetricInDb(item.id, 'views').catch(() => {});
@@ -5649,7 +5785,7 @@ function RestaurantModal({
     item.price
   ].filter(Boolean).slice(0, 4);
   const menuItems = (item.menuItems || []).filter((dish) => dish?.name);
-  const tabs = ['Sobre', 'Avaliações'];
+  const tabs = ['Cardápio', 'Sobre', 'Avaliações'];
   const renderActionButton = (icon, label, onPress, active = false) => (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.detailActionButton, active && styles.detailActionButtonActive, pressed && styles.activePress]}>
       <Ionicons name={icon} size={18} color={active ? colors.card : colors.ink} />
@@ -5712,9 +5848,9 @@ function RestaurantModal({
             </View>
 
             <View style={styles.detailActionRow}>
-              {renderActionButton('navigate-outline', 'Como chegar', () => onMaps(item))}
+              {renderActionButton('navigate-outline', 'Como chegar', () => onMaps(item), true)}
               {renderActionButton('chatbubble-ellipses-outline', 'WhatsApp', () => onWhatsApp(item, false))}
-              {renderActionButton('bookmark-outline', 'Conheci', () => onKnown(item), true)}
+              {renderActionButton('checkmark-circle-outline', 'Já conheci', () => onKnown(item))}
             </View>
 
             <View style={styles.detailStoryRow}>
@@ -5736,6 +5872,39 @@ function RestaurantModal({
                 </Pressable>
               ))}
             </View>
+
+            {activeDetailTab === 'Cardápio' ? (
+              <View style={styles.detailMenuTab}>
+                {item.menuPhoto ? <Image source={{ uri: item.menuPhoto }} style={styles.detailMenuPhoto} /> : null}
+                <View style={styles.detailMenuHeader}>
+                  <View>
+                    <Text style={styles.detailMenuEyebrow}>Cardápio</Text>
+                    <Text style={styles.detailMenuTitle}>{menuItems.length ? `${menuItems.length} itens disponíveis` : 'Em atualização'}</Text>
+                  </View>
+                </View>
+                {menuItems.length ? menuItems.map((dish, index) => {
+                  const itemKey = dish.id || `${dish.name}-${index}`;
+                  const expanded = expandedMenuItem === itemKey;
+                  const price = dish.priceLabel || (dish.price ? `R$ ${dish.price}` : 'Sob consulta');
+                  return (
+                    <Pressable key={itemKey} onPress={() => setExpandedMenuItem(expanded ? null : itemKey)} style={styles.detailMenuTabItem}>
+                      {dish.image ? <Image source={{ uri: dish.image }} style={styles.detailMenuTabItemImage} /> : <View style={styles.detailMenuImageFallback}><Ionicons name="restaurant-outline" size={22} color={colors.redDark} /></View>}
+                      <View style={styles.detailMenuCopy}>
+                        <Text style={styles.detailMenuName}>{dish.name}</Text>
+                        {dish.description ? <Text numberOfLines={expanded ? 5 : 2} style={styles.detailMenuDescription}>{dish.description}</Text> : null}
+                        <Text style={styles.detailMenuPrice}>{price}</Text>
+                      </View>
+                      <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={17} color={colors.muted} />
+                    </Pressable>
+                  );
+                }) : (
+                  <View style={styles.detailMenuEmpty}>
+                    <Ionicons name="restaurant-outline" size={26} color={colors.redDark} />
+                    <Text style={styles.detailMenuEmptyText}>O restaurante ainda não publicou itens no cardápio.</Text>
+                  </View>
+                )}
+              </View>
+            ) : null}
 
             {activeDetailTab === 'Sobre' ? (
               <View style={styles.detailAboutSection}>
@@ -7601,6 +7770,259 @@ Object.assign(styles, {
   authSwitchAction: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold' },
   authLegal: { marginTop: 14, color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11, lineHeight: 17, textAlign: 'center' },
   authSheet: { width: '100%', maxWidth: 520, maxHeight: '94%', marginTop: 'auto', alignSelf: 'center', borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: colors.surface, paddingHorizontal: 24, paddingTop: 30, paddingBottom: 24 },
+  discoveryPage: { paddingTop: 4, paddingBottom: 18 },
+  discoveryTopBar: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  discoveryTopActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  discoveryIconButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  discoveryNotificationDot: { position: 'absolute', right: 7, top: 7, width: 7, height: 7, borderRadius: 4, backgroundColor: colors.redDark, borderWidth: 1.5, borderColor: colors.card },
+  discoveryAvatar: { width: 38, height: 38, borderRadius: 19, overflow: 'hidden', backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
+  discoveryAvatarImage: { width: '100%', height: '100%' },
+  discoveryAvatarText: { color: colors.card, fontFamily: bodyFont, fontSize: 15 },
+  discoveryHeadingRow: { marginTop: 14, marginBottom: 14, gap: 3 },
+  discoveryTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 30, lineHeight: 35 },
+  discoveryLocation: { marginTop: 2, flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', maxWidth: '100%' },
+  discoveryLocationText: { maxWidth: 250, color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 12 },
+  discoverySearch: { height: 48, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, flexDirection: 'row', alignItems: 'center', paddingLeft: 13, paddingRight: 5, gap: 8 },
+  discoverySearchInput: { flex: 1, minWidth: 0, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 14 },
+  discoveryFilterButton: { width: 38, height: 38, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
+  discoveryCategoryRow: { gap: 12, paddingTop: 18, paddingBottom: 6, paddingRight: 20 },
+  discoveryCategory: { width: 66, alignItems: 'center', gap: 7 },
+  discoveryCategoryImage: { width: 60, height: 60, borderRadius: 8, backgroundColor: colors.surface },
+  discoveryCategoryLabel: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 11, textAlign: 'center' },
+  discoveryFeatureCard: { height: 246, borderRadius: 8, overflow: 'hidden', backgroundColor: colors.ink },
+  discoveryFeatureImage: { width: '100%', height: '100%' },
+  discoveryFeatureScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.23)' },
+  discoverySaveButton: { position: 'absolute', right: 12, top: 12, width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(0,0,0,0.38)', alignItems: 'center', justifyContent: 'center' },
+  discoveryFeatureCopy: { position: 'absolute', left: 14, right: 14, bottom: 13, gap: 4 },
+  discoveryFeatureName: { color: '#FFFFFF', fontFamily: titleFont, fontSize: 22, lineHeight: 26 },
+  discoveryFeatureMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  discoveryFeatureMeta: { flex: 1, minWidth: 0, color: 'rgba(255,255,255,0.9)', fontFamily: 'Nunito_700Bold', fontSize: 12 },
+  discoveryFeatureRating: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  discoveryFeatureRatingText: { color: '#FFFFFF', fontFamily: bodyFont, fontSize: 12 },
+  discoveryNearbyRow: { gap: 11, paddingTop: 12, paddingBottom: 3, paddingRight: 20 },
+  discoveryNearbyCard: { width: 150, gap: 4 },
+  discoveryNearbyImage: { width: 150, height: 102, borderRadius: 8, backgroundColor: colors.surface },
+  discoveryNearbyName: { color: colors.ink, fontFamily: bodyFont, fontSize: 14, marginTop: 2 },
+  discoveryNearbyMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11 },
+  discoveryNewsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 14 },
+  discoveryNewsCard: { width: '48%', gap: 4 },
+  discoveryNewsImage: { width: '100%', aspectRatio: 1.25, borderRadius: 8, backgroundColor: colors.surface },
+  discoveryNewsName: { color: colors.ink, fontFamily: bodyFont, fontSize: 14, marginTop: 2 },
+  discoveryNewsMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11 },
+  socialFeedPage: { backgroundColor: colors.card },
+  socialFeedHeader: { paddingHorizontal: 16, paddingTop: 4, borderBottomWidth: 1, borderBottomColor: colors.softLine },
+  socialFeedTopBar: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  socialFeedTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 30, lineHeight: 35, marginTop: 7 },
+  socialFeedTabs: { height: 42, flexDirection: 'row', alignItems: 'stretch', gap: 24, marginTop: 3 },
+  socialFeedTab: { justifyContent: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  socialFeedTabActive: { justifyContent: 'center', borderBottomWidth: 2, borderBottomColor: colors.redDark },
+  socialFeedTabText: { color: colors.muted, fontFamily: bodyFont, fontSize: 13 },
+  socialFeedTabActiveText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 13 },
+  feedComposerCard: { minHeight: 62, borderRadius: 0, backgroundColor: colors.card, borderWidth: 0, borderBottomWidth: 1, borderBottomColor: colors.softLine, paddingHorizontal: 16, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 0, marginBottom: 0 },
+  feedComposerAvatar: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  feedComposerCopy: { flex: 1, minWidth: 0, minHeight: 40, borderRadius: 20, borderWidth: 1, borderColor: colors.line, justifyContent: 'center', paddingHorizontal: 14 },
+  feedComposerTitle: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 13 },
+  feedComposerButton: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  feedList: { gap: 0 },
+  feedPostCard: { overflow: 'hidden', borderRadius: 0, backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.line },
+  feedPostHeader: { minHeight: 62, paddingHorizontal: 14, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  feedImageWrap: { width: '100%', overflow: 'hidden', backgroundColor: '#F1F1F1' },
+  feedImage: { width: '100%', height: '100%' },
+  feedPostBody: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 17, gap: 7 },
+  feedActionsRow: { minHeight: 32, flexDirection: 'row', alignItems: 'center', gap: 13 },
+  feedActionButton: { minWidth: 24, minHeight: 30, paddingHorizontal: 0, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  feedSaveAction: { marginLeft: 'auto' },
+  feedLikesText: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  feedCaption: { color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 13, lineHeight: 18 },
+  feedCaptionAuthor: { fontFamily: bodyFont },
+  feedComments: { gap: 3 },
+  feedCommentText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17 },
+  feedComposerSheet: { width: '100%', maxWidth: 560, minHeight: '100%', alignSelf: 'center', backgroundColor: colors.bg, paddingHorizontal: 16, paddingTop: Platform.OS === 'ios' ? 52 : 22, paddingBottom: 30, gap: 12 },
+  feedComposerTopBar: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 10, borderBottomWidth: 1, borderBottomColor: colors.line, marginHorizontal: -16, paddingHorizontal: 16, paddingBottom: 10 },
+  feedComposerClose: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },
+  feedComposerSheetTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 18 },
+  feedComposerSheetMeta: { display: 'none' },
+  feedPublishButton: { minHeight: 38, borderRadius: 7, backgroundColor: colors.redDark, paddingHorizontal: 15, alignItems: 'center', justifyContent: 'center' },
+  feedSearchBox: { minHeight: 50, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  feedRestaurantResult: { minHeight: 58, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  feedComposerTextInput: { minHeight: 104, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 12, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 14, textAlignVertical: 'top' },
+  feedPickedPhotoWrap: { width: '48%', aspectRatio: 1, borderRadius: 8, overflow: 'hidden', backgroundColor: colors.surface },
+  feedPickPhotoCard: { width: '48%', aspectRatio: 1, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(241,61,11,0.42)', backgroundColor: '#FFF4EF', alignItems: 'center', justifyContent: 'center', gap: 5, padding: 10 },
+  realMapCard: { height: 510, marginHorizontal: -18, backgroundColor: '#EAF0E5', overflow: 'hidden' },
+  mapCard: { height: 510, marginHorizontal: -18, backgroundColor: '#EAF0E5', overflow: 'hidden' },
+  webMapMarker: { position: 'absolute', zIndex: 5, width: 44, height: 52, marginLeft: -22, marginTop: -46, alignItems: 'center', justifyContent: 'flex-start' },
+  webMapMarkerDot: { width: 36, height: 36, borderRadius: 18, marginTop: 0, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: colors.card, shadowColor: colors.ink, shadowOpacity: 0.18, shadowRadius: 8, elevation: 5 },
+  webMapMarkerDotSelected: { width: 42, height: 42, borderRadius: 21, borderColor: '#FFFFFF', shadowOpacity: 0.28 },
+  webMapMarkerLetter: { color: '#FFFFFF', fontFamily: titleFont, fontSize: 18, lineHeight: 21 },
+  selectedMapCard: { position: 'absolute', left: 14, right: 14, bottom: 14, zIndex: 9, minHeight: 98, borderRadius: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.line, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 11, shadowColor: colors.ink, shadowOpacity: 0.18, shadowRadius: 16, elevation: 8 },
+  selectedMapImage: { width: 84, height: 78, borderRadius: 7, backgroundColor: colors.surface },
+  selectedMapCopy: { flex: 1, minWidth: 0, gap: 3 },
+  selectedMapName: { color: colors.ink, fontFamily: titleFont, fontSize: 17, lineHeight: 21 },
+  selectedMapMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11 },
+  selectedMapStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  selectedMapRating: { color: colors.ink, fontFamily: bodyFont, fontSize: 11 },
+  selectedMapStatus: { color: colors.muted, fontFamily: bodyFont, fontSize: 11, marginLeft: 5 },
+  selectedMapStatusOpen: { color: colors.green },
+  selectedMapRoute: { width: 38, height: 38, borderRadius: 7, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  mapPage: { paddingTop: 4 },
+  mapTopBar: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', position: 'relative' },
+  mapPageTitle: { position: 'absolute', left: 92, right: 92, textAlign: 'center', color: colors.ink, fontFamily: titleFont, fontSize: 20 },
+  mapTopActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  mapTopButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
+  mapQuickFilters: { gap: 8, paddingTop: 10, paddingBottom: 12, paddingRight: 18 },
+  mapQuickFilter: { minHeight: 36, paddingHorizontal: 13, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' },
+  mapQuickFilterActive: { backgroundColor: colors.greenSoft, borderColor: 'rgba(33,138,75,0.35)' },
+  mapQuickFilterText: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  mapQuickFilterTextActive: { color: colors.green },
+  searchPageField: { minHeight: 48, borderRadius: 8, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, flexDirection: 'row', alignItems: 'center', gap: 9, paddingLeft: 13, paddingRight: 5 },
+  pageInput: { flex: 1, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 14 },
+  searchFilterButton: { width: 38, height: 38, borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card },
+  mapSheet: { marginHorizontal: -18, marginTop: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0, backgroundColor: colors.bg, paddingHorizontal: 18, paddingTop: 14, paddingBottom: 24 },
+  sheetHandle: { display: 'none' },
+  detailBackdrop: { flex: 1, backgroundColor: 'rgba(20,20,20,0.52)' },
+  detailSheet: { flex: 1, width: '100%', maxWidth: 640, alignSelf: 'center', backgroundColor: colors.bg },
+  detailBanner: { width: '100%', aspectRatio: 1.25, backgroundColor: colors.surface },
+  detailTopActions: { position: 'absolute', top: Platform.OS === 'ios' ? 48 : 20, left: 14, right: 14, zIndex: 4, flexDirection: 'row', justifyContent: 'space-between' },
+  detailRightActions: { flexDirection: 'row', gap: 7 },
+  floatButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.94)', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.line },
+  detailAvatarWrap: { display: 'none' },
+  detailProfileSection: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24, gap: 16 },
+  detailProfileHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  detailTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 27, lineHeight: 32 },
+  detailSub: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 13, lineHeight: 18 },
+  detailBio: { color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 13, lineHeight: 19 },
+  detailScoreBadge: { minWidth: 62, minHeight: 62, borderRadius: 8, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center', gap: 1, paddingHorizontal: 7 },
+  detailStatsRow: { flexDirection: 'row', gap: 0, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line },
+  detailStat: { flex: 1, minWidth: 0, borderRadius: 0, backgroundColor: 'transparent', borderWidth: 0, paddingVertical: 11, alignItems: 'center', justifyContent: 'center' },
+  detailActionRow: { flexDirection: 'row', gap: 7, flexWrap: 'wrap' },
+  detailActionButton: { minHeight: 44, flexGrow: 1, flexBasis: '30%', borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  detailActionButtonActive: { backgroundColor: colors.redDark, borderColor: colors.redDark, flexBasis: '100%' },
+  detailStoryRing: { width: 52, height: 52, borderRadius: 26, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center' },
+  detailTabRow: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.line, borderBottomWidth: 1, borderBottomColor: colors.line },
+  detailTabButton: { flex: 1, minHeight: 45, alignItems: 'center', justifyContent: 'center' },
+  detailTabText: { color: colors.muted, fontFamily: bodyFont, fontSize: 12 },
+  detailTabTextActive: { color: colors.redDark },
+  detailTabUnderlineActive: { backgroundColor: colors.redDark },
+  detailMenuTab: { gap: 10 },
+  detailMenuHeader: { minHeight: 52, borderRadius: 0, backgroundColor: 'transparent', borderWidth: 0, borderBottomWidth: 1, borderColor: colors.line, paddingHorizontal: 0, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  detailMenuTabItem: { minHeight: 92, borderRadius: 0, backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.line, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  detailMenuTabItemImage: { width: 76, height: 76, borderRadius: 7, backgroundColor: colors.surface },
+  detailMenuImageFallback: { width: 76, height: 76, borderRadius: 7, backgroundColor: '#FFF2EC', alignItems: 'center', justifyContent: 'center' },
+  detailMenuEmpty: { minHeight: 120, borderRadius: 8, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center', gap: 8, padding: 18 },
+  detailMenuEmptyText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 13, textAlign: 'center' },
+  dineProfilePage: { paddingTop: 4, paddingBottom: 18 },
+  dineProfileTopBar: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginBottom: 14, position: 'relative' },
+  dineProfileTopTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 20, lineHeight: 25 },
+  dineProfileLogo: { display: 'none' },
+  dineProfileTopActions: { position: 'absolute', right: 0, flexDirection: 'row', alignItems: 'center', gap: 3 },
+  dineProfileTopButton: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  dineProfileHero: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, marginBottom: 15 },
+  dineProfileAvatarWrap: { width: 94, height: 94, borderRadius: 47, position: 'relative', alignItems: 'center', justifyContent: 'center' },
+  dineProfileAvatarImage: { width: 90, height: 90, borderRadius: 45 },
+  dineProfileAvatarEmpty: { width: 90, height: 90, borderRadius: 45, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
+  dineProfileAvatarInitial: { color: colors.card, fontFamily: titleFont, fontSize: 36 },
+  dineProfileAvatarRing: { position: 'absolute', width: 94, height: 94, borderRadius: 47, borderWidth: 1, borderColor: colors.line },
+  dineProfileStarBadge: { position: 'absolute', right: -1, bottom: 2, width: 30, height: 30, borderRadius: 15, backgroundColor: colors.redDark, borderWidth: 2, borderColor: colors.card, alignItems: 'center', justifyContent: 'center' },
+  dineProfileHeroCopy: { flex: 1, minWidth: 0, gap: 2 },
+  dineProfileNameInput: { minHeight: 28, padding: 0, color: colors.ink, fontFamily: titleFont, fontSize: 20, lineHeight: 25 },
+  dineProfileHandleInput: { minHeight: 21, padding: 0, color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 13 },
+  dineProfileBioInput: { minHeight: 36, padding: 0, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, maxWidth: 280, textAlignVertical: 'top' },
+  dineProfileLocationRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  dineProfileLocationInput: { flex: 1, minWidth: 0, minHeight: 20, padding: 0, color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 11 },
+  dineProfileInstagramPill: { display: 'none' },
+  dineProfileStatsCard: { minHeight: 62, borderRadius: 0, backgroundColor: 'transparent', borderWidth: 0, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line, flexDirection: 'row', alignItems: 'stretch', marginBottom: 12 },
+  dineProfileStatItem: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 1, paddingVertical: 9 },
+  dineProfileStatDivider: { borderLeftWidth: 1, borderLeftColor: colors.softLine },
+  dineProfileStatValue: { color: colors.ink, fontFamily: titleFont, fontSize: 18, lineHeight: 21 },
+  dineProfileStatLabel: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, textAlign: 'center' },
+  profilePrimaryActions: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  profileEditAction: { flex: 1, minHeight: 38, borderRadius: 7, borderWidth: 1, borderColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  profileEditActionText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 12 },
+  profileSavedAction: { minWidth: 104, minHeight: 38, borderRadius: 7, borderWidth: 1, borderColor: colors.line, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  profileSavedActionText: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  profileContentTabs: { height: 42, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line, flexDirection: 'row' },
+  profileContentTab: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  profileContentTabActive: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderBottomWidth: 2, borderBottomColor: colors.redDark },
+  profileContentTabText: { color: colors.muted, fontFamily: bodyFont, fontSize: 11 },
+  profileContentTabActiveText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 11 },
+  profileMediaGrid: { marginHorizontal: -18, flexDirection: 'row', flexWrap: 'wrap', gap: 1, backgroundColor: colors.line },
+  profileMediaTile: { width: '33.1%', aspectRatio: 1, backgroundColor: colors.surface, overflow: 'hidden' },
+  profileMediaImage: { width: '100%', height: '100%' },
+  profileEmptyMedia: { minHeight: 132, marginHorizontal: -18, alignItems: 'center', justifyContent: 'center', gap: 4, padding: 18, borderBottomWidth: 1, borderBottomColor: colors.line },
+  profileEmptyMediaTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 14, textAlign: 'center' },
+  profileEmptyMediaText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11, textAlign: 'center' },
+  profileJourneyTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 18, marginTop: 24, marginBottom: 10 },
+  dineProfileLevelCard: { minHeight: 104, borderRadius: 8, backgroundColor: colors.ink, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 },
+  dineProfileSectionHeader: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 14 },
+  dineProfileSectionTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 16 },
+  dineProfilePreferenceCard: { minHeight: 68, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  dineProfileReviewCard: { width: 174, borderRadius: 8, overflow: 'hidden', backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
+  dineProfileBadgeMedal: { width: 58, height: 58, borderRadius: 29, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
+  dineProfileEditButton: { minHeight: 46, borderRadius: 8, backgroundColor: colors.redDark, marginTop: 22, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  savedPage: { paddingTop: 4 },
+  savedTopBar: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', position: 'relative' },
+  savedTitle: { position: 'absolute', left: 70, right: 70, textAlign: 'center', color: colors.ink, fontFamily: titleFont, fontSize: 20 },
+  savedTopActions: { flexDirection: 'row', gap: 3 },
+  savedTopButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
+  savedCollectionList: { gap: 9 },
+  savedCollectionCard: { minHeight: 100, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 8, flexDirection: 'row', alignItems: 'center', gap: 11 },
+  savedCollectionImage: { width: 98, height: 82, borderRadius: 7, backgroundColor: colors.surface },
+  savedCollectionCopy: { flex: 1, minWidth: 0, gap: 2 },
+  savedCollectionName: { color: colors.ink, fontFamily: titleFont, fontSize: 16 },
+  savedCollectionCount: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11 },
+  savedCollectionPrivacy: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 5 },
+  savedCollectionPrivacyText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10 },
+  activityPage: { paddingTop: 2 },
+  activityTabs: { flexDirection: 'row', gap: 8, marginBottom: 20 },
+  activityTab: { minHeight: 36, paddingHorizontal: 18, borderRadius: 18, backgroundColor: '#F1F1F1', alignItems: 'center', justifyContent: 'center' },
+  activityTabActive: { backgroundColor: colors.redDark },
+  activityTabText: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  activityTabTextActive: { color: '#FFFFFF' },
+  activityGroupTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 16, marginBottom: 7 },
+  activityList: { borderBottomWidth: 1, borderBottomColor: colors.line },
+  activityItem: { minHeight: 76, borderTopWidth: 1, borderTopColor: colors.softLine, flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, position: 'relative' },
+  activityAvatar: { width: 42, height: 42, borderRadius: 21, overflow: 'hidden', backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
+  activityAvatarImage: { width: '100%', height: '100%' },
+  activityAvatarText: { color: colors.card, fontFamily: bodyFont, fontSize: 15 },
+  activityCopy: { flex: 1, minWidth: 0, gap: 2 },
+  activityText: { color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17 },
+  activityAuthor: { fontFamily: bodyFont },
+  activityTime: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10 },
+  activityThumb: { width: 48, height: 48, borderRadius: 7, backgroundColor: colors.surface },
+  activityUnread: { position: 'absolute', right: -8, width: 7, height: 7, borderRadius: 4, backgroundColor: colors.redDark },
+  activityEmpty: { minHeight: 110, alignItems: 'center', justifyContent: 'center', padding: 16 },
+  activityEmptyText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, textAlign: 'center' },
+  pagePanel: { gap: 11, borderRadius: 8, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, padding: 14, marginBottom: 14 },
+  button: { width: '100%', minHeight: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, flexDirection: 'row', alignSelf: 'stretch' },
+  primaryButton: { backgroundColor: colors.redDark },
+  secondaryButton: { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line },
+  subscreenHeader: { minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+  backButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'transparent', alignItems: 'center', justifyContent: 'center' },
+  subscreenTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 22, lineHeight: 27 },
+  subscreenSubtitle: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, marginTop: 1 },
+  emptyState: { minHeight: 132, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center', padding: 18 },
+  emptyTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 18, textAlign: 'center' },
+  emptyText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 18, textAlign: 'center', marginTop: 5 },
+  miniImage: { width: 112, height: 78, borderRadius: 8 },
+  miniTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 17, lineHeight: 21 },
+  settingsList: { overflow: 'hidden', borderRadius: 8, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
+  settingsRowIcon: { width: 36, height: 36, borderRadius: 8, backgroundColor: '#FFF2EC', alignItems: 'center', justifyContent: 'center' },
+  segmented: { height: 42, borderRadius: 0, borderWidth: 0, borderBottomWidth: 1, borderColor: colors.line, flexDirection: 'row', padding: 0, marginBottom: 12 },
+  segment: { flex: 1, borderRadius: 0, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  segmentActive: { backgroundColor: 'transparent', borderBottomColor: colors.redDark },
+  segmentText: { color: colors.muted, fontFamily: bodyFont, fontSize: 11 },
+  segmentTextActive: { color: colors.redDark },
+  screenContent: { paddingHorizontal: 18, paddingBottom: 112, width: '100%', maxWidth: 720, alignSelf: 'center' },
+  screenContentFeed: { paddingHorizontal: 0, maxWidth: 560 },
+  logoWrap: { alignSelf: 'flex-start', width: 82, height: 40, justifyContent: 'center', marginLeft: 0 },
+  logoImage: { width: 82, height: 40 },
+  sectionTitle: { marginTop: 24, marginBottom: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  sectionTitleText: { color: colors.ink, fontFamily: titleFont, fontSize: 19, lineHeight: 24 },
+  sectionAction: { color: colors.redDark, fontFamily: bodyFont, fontSize: 13 },
+  bottomNav: { position: 'absolute', left: 0, right: 0, bottom: 0, height: Platform.OS === 'ios' ? 88 : 78, borderRadius: 0, backgroundColor: 'rgba(255,255,255,0.98)', borderTopWidth: 1, borderColor: colors.line, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 18, paddingTop: 7, paddingBottom: Platform.OS === 'ios' ? 18 : 8, gap: 2 },
+  navButton: { flex: 1, minWidth: 0, height: 54, borderRadius: 0, alignItems: 'center', justifyContent: 'center', gap: 3 },
+  navButtonActive: { backgroundColor: 'transparent' },
+  navText: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 10 },
   settingsDangerZone: { marginTop: 2, marginBottom: 20 },
   settingsLogoutButton: { minHeight: 50, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(200,70,37,0.28)', backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   settingsLogoutText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 14 }
