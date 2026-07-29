@@ -177,6 +177,7 @@ function normalizeReviewFromDb(row) {
     userName: row?.author_name || payload.userName,
     rating: payload.rating || row?.average_score || row?.experience_score || 0,
     comment: row?.comment || payload.comment || '',
+    status: row?.status || payload.status || 'approved',
     createdAtMs: payload.createdAtMs || (row?.created_at ? new Date(row.created_at).getTime() : 0)
   };
 }
@@ -476,6 +477,7 @@ export async function fetchReviewsFromDb(restaurantId) {
     .order('created_at', { ascending: false });
   throwIfError(error);
   return (data || []).map(normalizeReviewFromDb)
+    .filter((review) => !['removed', 'deleted', 'rejected'].includes(String(review.status || '').toLowerCase()))
     .sort((a, b) => Number(b.pinned || false) - Number(a.pinned || false) || Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0));
 }
 
@@ -676,7 +678,9 @@ export async function updateReviewInDb(id, updates) {
   const { data: current, error: currentError } = await client.from('reviews').select('app_payload').eq('legacy_id', String(id)).maybeSingle();
   throwIfError(currentError);
   const nextPayload = { ...(current?.app_payload || {}), ...updates };
-  const { error } = await client.from('reviews').update({ app_payload: nextPayload, updated_at: nowIso() }).eq('legacy_id', String(id));
+  const update = { app_payload: nextPayload, updated_at: nowIso() };
+  if (updates?.status) update.status = updates.status;
+  const { error } = await client.from('reviews').update(update).eq('legacy_id', String(id));
   throwIfError(error);
 }
 
@@ -713,4 +717,21 @@ export async function saveUserProfileToDb(user) {
     app_payload: cleanData(user),
     updated_at: nowIso()
   });
+}
+
+export async function deleteUserAccountInDb(user) {
+  const client = requireClient();
+  if (!client || !user?.id) return;
+  const userId = String(user.id);
+  const results = await Promise.all([
+    client.from('app_favorites').delete().eq('user_legacy_id', userId),
+    client.from('feed_posts').update({ status: 'deleted', updated_at: nowIso() }).eq('author_legacy_id', userId),
+    client.from('feed_comments').update({ status: 'deleted', updated_at: nowIso() }).eq('author_legacy_id', userId),
+    client.from('feed_reactions').delete().eq('user_legacy_id', userId),
+    client.from('user_blocks').delete().eq('user_legacy_id', userId),
+    client.from('push_tokens').delete().eq('user_legacy_id', userId),
+    client.from('invites').update({ status: 'deleted', updated_at: nowIso() }).eq('owner_legacy_id', userId),
+    client.from('app_profiles').delete().eq('legacy_id', userId)
+  ]);
+  results.forEach(({ error }) => throwIfError(error));
 }

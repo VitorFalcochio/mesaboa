@@ -8,6 +8,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "build": "expo export --platform web --output-dir dist",
+    "build:sites": "npm run build && node scripts/prepare-sites-build.js",
     "smoke": "node scripts/smoke-check.js"
   },
   "dependencies": {

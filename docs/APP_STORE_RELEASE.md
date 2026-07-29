@@ -51,7 +51,7 @@ Preencher antes de enviar para review:
 - Nome, subtitulo, categoria e descricao.
 - Screenshots dos tamanhos exigidos pelo App Store Connect.
 - URL publica de suporte.
-- URL publica de politica de privacidade.
+- URL publica de politica de privacidade, tambem configurada no app por `EXPO_PUBLIC_PRIVACY_POLICY_URL`.
 - App Privacy: declarar localizacao, fotos, identificadores de usuario, conteudo gerado pelo usuario, dados de contato, diagnosticos e qualquer dado coletado por Supabase/Google Maps/Expo.
 - Contato de review e credenciais de teste, se houver area logada.
 
@@ -64,10 +64,23 @@ Antes de usar dados reais, resolver uma destas opcoes:
 
 Pendencias conhecidas no codigo atual:
 
-- Contas locais/demo ainda existem em `App.js`.
+- Contas locais/demo ainda existem em `App.js`, mas ficam desativadas por padrao.
 - A flag `EXPO_PUBLIC_ENABLE_DEMO_DATA` deve ficar `false` em producao.
 - Policies em `supabase/migrations/202607210001_app_supabase_facade.sql` permitem escrita ampla para `anon`.
-- A tela interna de termos e privacidade e apenas um resumo; a App Store exige uma politica publica por URL.
+- Publicar a politica de privacidade completa em uma URL real antes do envio.
+
+## UGC e guideline 1.2
+
+Antes do review, testar:
+
+- Denunciar avaliacao no detalhe do restaurante.
+- Denunciar publicacao e perfil no feed.
+- Bloquear perfil abusivo.
+- Publicar avaliacao/comentario com termo ofensivo e confirmar bloqueio.
+- Entrar como admin e confirmar fila de moderacao em `Central admin`.
+- Remover avaliacao como admin.
+- Abrir suporte por email e WhatsApp.
+- Excluir conta em `Configuracoes > Seguranca`.
 
 ## Requisito Apple vigente
 

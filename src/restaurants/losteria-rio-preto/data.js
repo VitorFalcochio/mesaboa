@@ -11,7 +11,7 @@ export const restaurant = {
   address: 'Rua XV de Novembro, 4353',
   latitude: -20.8174,
   longitude: -49.3825,
-  image: 'https://media-cdn.tripadvisor.com/media/photo-s/09/d2/5c/4c/l-osteria.jpg',
+  image: 'https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=1200&q=86',
   description: 'Casa italiana tradicional na Redentora, com massas, vinhos e clima acolhedor para almoço e jantar.',
   highlights: [
     'Massas',
@@ -23,7 +23,9 @@ export const restaurant = {
     'reserva',
     'vinhos'
   ],
-  logo: null,
-  coverPhoto: null,
-  photos: []
+  logo: require('./logo.svg'),
+  coverPhoto: 'https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=1200&q=86',
+  photos: [
+    'https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=1200&q=86'
+  ]
 };
