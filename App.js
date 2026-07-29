@@ -757,6 +757,24 @@ function buildRestaurantGeocodeQuery(item) {
   return parts.join(', ');
 }
 
+const dineNativeMapStyle = [
+  { elementType: 'geometry', stylers: [{ color: '#F4F2ED' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#626462' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#FAF9F6' }] },
+  { featureType: 'administrative', elementType: 'geometry.stroke', stylers: [{ color: '#C8CECB' }] },
+  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#EEF1E8' }] },
+  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#E8EFE5' }] },
+  { featureType: 'poi.business', stylers: [{ visibility: 'off' }] },
+  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#D5E9D3' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#D8DFE0' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#F3CFC2' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#E4B3A3' }] },
+  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#DCE4E4' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#BDDCE2' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#527B84' }] }
+];
+
 const webMapTileSize = 256;
 
 function webMapZoom(region) {
@@ -1024,7 +1042,48 @@ function matchesQuickFilter(item, filter) {
   return normalize(`${item.name} ${item.type} ${item.district}`).includes(normalize(filter));
 }
 
-function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocation, locationGranted }) {
+function matchesRestaurantQuery(item, query) {
+  const needle = normalize(query);
+  if (!needle) return true;
+  if (needle.includes('aberto agora') && !getRestaurantOpenStatus(item).open) return false;
+  if ((needle.includes('ate 80') || needle.includes('economico') || needle.includes('barato')) && !['$', '$$'].includes(item.price)) return false;
+  const searchable = normalize([
+    item.name,
+    item.type,
+    item.district,
+    item.address,
+    item.description,
+    ...(item.tags || []),
+    ...(item.highlights || []),
+    ...(item.menuItems || []).map((dish) => `${dish.name || ''} ${dish.category || ''} ${dish.description || ''}`)
+  ].join(' '));
+  const intentions = [
+    { terms: ['romantico', 'encontro', 'casal'], matches: ['romantico', 'vinho', 'italiana', 'bistro', 'jantar', 'aconchegante'] },
+    { terms: ['crianca', 'criancas', 'familia'], matches: ['familia', 'infantil', 'kids', 'espaco', 'parque'] },
+    { terms: ['trabalhar', 'reuniao', 'notebook'], matches: ['cafe', 'cafeteria', 'wifi', 'padaria', 'coworking'] },
+    { terms: ['barato', 'economico', 'ate 80'], matches: ['lanche', 'padaria', 'self service', 'comida brasileira'] },
+    { terms: ['doce', 'sobremesa'], matches: ['doce', 'sorvete', 'acai', 'cafe', 'confeitaria'] }
+  ];
+  const intent = intentions.find((group) => group.terms.some((term) => needle.includes(term)));
+  const meaningfulWords = needle.split(' ').filter((word) => word.length > 2 && !['perto', 'mim', 'lugar', 'comida', 'restaurante', 'aberto', 'agora'].includes(word));
+  if (intent && intent.matches.some((term) => searchable.includes(term))) return true;
+  if (!meaningfulWords.length) return true;
+  return meaningfulWords.every((word) => searchable.includes(word));
+}
+
+function PartnerMap({
+  restaurants,
+  onSelect,
+  onFavorite,
+  onDirections,
+  onLocate,
+  favoriteNames = [],
+  postCountsByRestaurant = {},
+  region,
+  onRegionChange,
+  userLocation,
+  locationGranted
+}) {
   const { width } = useWindowDimensions();
   const dragStartRef = useRef(null);
   const [webPanOffset, setWebPanOffset] = useState({ x: 0, y: 0 });
@@ -1094,29 +1153,60 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
   function renderSelectedMapCard() {
     if (!selectedMapItem) return null;
     const openStatus = getRestaurantOpenStatus(selectedMapItem);
+    const favorite = favoriteNames.includes(selectedMapItem.name);
     return (
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Abrir restaurante ${selectedMapItem.name}`}
-        onPress={() => onSelect(selectedMapItem)}
-        style={styles.selectedMapCard}
-      >
-        <Image source={imageSource(selectedMapItem.coverPhoto || selectedMapItem.image || selectedMapItem.logo)} style={styles.selectedMapImage} />
-        <View style={styles.selectedMapCopy}>
-          <Text numberOfLines={1} style={styles.selectedMapName}>{selectedMapItem.name}</Text>
-          <Text numberOfLines={1} style={styles.selectedMapMeta}>
-            {selectedMapItem.type} • {formatDistance(selectedMapItem.distanceKm)}
-          </Text>
-          <View style={styles.selectedMapStatusRow}>
-            <Ionicons name="star" size={13} color={colors.gold} />
-            <Text style={styles.selectedMapRating}>{scoreValue(selectedMapItem).toFixed(1)}</Text>
-            <Text style={[styles.selectedMapStatus, openStatus.open && styles.selectedMapStatusOpen]}>{openStatus.label}</Text>
+      <View style={styles.selectedMapCard}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Abrir restaurante ${selectedMapItem.name}`}
+          onPress={() => onSelect(selectedMapItem)}
+          style={styles.selectedMapMain}
+        >
+          <Image source={imageSource(selectedMapItem.coverPhoto || selectedMapItem.image || selectedMapItem.logo)} style={styles.selectedMapImage} />
+          <View style={styles.selectedMapCopy}>
+            <View style={styles.selectedMapTitleRow}>
+              <Text numberOfLines={1} style={styles.selectedMapName}>{selectedMapItem.name}</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={favorite ? 'Remover dos favoritos' : 'Salvar nos favoritos'}
+                hitSlop={8}
+                onPress={(event) => {
+                  event?.stopPropagation?.();
+                  onFavorite?.(selectedMapItem.name);
+                }}
+                style={styles.selectedMapSave}
+              >
+                <Ionicons name={favorite ? 'bookmark' : 'bookmark-outline'} size={22} color={colors.redDark} />
+              </Pressable>
+            </View>
+            <Text numberOfLines={1} style={styles.selectedMapMeta}>{selectedMapItem.type}</Text>
+            {postCountsByRestaurant[selectedMapItem.id] ? (
+              <Text numberOfLines={1} style={styles.selectedMapSocialMeta}>
+                {postCountsByRestaurant[selectedMapItem.id]} novidades da comunidade
+              </Text>
+            ) : null}
+            <View style={styles.selectedMapStatusRow}>
+              <Ionicons name="star" size={14} color={colors.redDark} />
+              <Text style={styles.selectedMapRating}>{scoreValue(selectedMapItem).toFixed(1).replace('.', ',')}</Text>
+              <Text style={styles.selectedMapDivider}>•</Text>
+              <Text style={styles.selectedMapRating}>{formatDistance(selectedMapItem.distanceKm)}</Text>
+              <Text style={styles.selectedMapDivider}>•</Text>
+              <Text style={styles.selectedMapRating}>{selectedMapItem.price || '$$'}</Text>
+              <Text style={styles.selectedMapDivider}>•</Text>
+              <Text style={[styles.selectedMapStatus, openStatus.open && styles.selectedMapStatusOpen]}>{openStatus.label}</Text>
+            </View>
           </View>
-        </View>
-        <View style={styles.selectedMapRoute}>
-          <Ionicons name="navigate-outline" size={18} color="#FFFFFF" />
-        </View>
-      </Pressable>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Traçar rota para ${selectedMapItem.name}`}
+          onPress={() => onDirections?.(selectedMapItem)}
+          style={styles.selectedMapRoute}
+        >
+          <Ionicons name="navigate" size={18} color="#FFFFFF" />
+          <Text style={styles.selectedMapRouteText}>Como chegar</Text>
+        </Pressable>
+      </View>
     );
   }
 
@@ -1128,28 +1218,38 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
           region={region}
           onRegionChangeComplete={onRegionChange}
           showsUserLocation={locationGranted}
-          showsMyLocationButton={locationGranted}
+          showsMyLocationButton={false}
           showsCompass
+          showsPointsOfInterest={false}
+          toolbarEnabled={false}
+          customMapStyle={dineNativeMapStyle}
         >
-          {userLocation ? (
-            <Marker
-              coordinate={userLocation}
-              title="Você está aqui"
-              description="Localização usada para calcular proximidade"
-              pinColor="#2C97DE"
-            />
-          ) : null}
           {restaurants.map((item, index) => (
             <Marker
               key={item.id}
               coordinate={item.coordinate || coordinateForRestaurant(item, index)}
               title={item.name}
               description={`${item.type} - ${item.district}${Number.isFinite(item.distanceKm) ? ` • ${formatDistance(item.distanceKm)}` : ''}`}
-              pinColor={colors.redDark}
               onPress={() => setSelectedMapItem(item)}
-            />
+              anchor={{ x: 0.5, y: 1 }}
+            >
+              <View style={[styles.nativeMapMarker, selectedMapItem?.id === item.id && styles.nativeMapMarkerSelected]}>
+              <View style={styles.nativeMapMarkerPhotoWrap}>
+                  <Image source={imageSource(item.logo || item.coverPhoto || item.image)} style={styles.nativeMapMarkerPhoto} />
+                </View>
+                <View style={styles.nativeMapMarkerTip} />
+                {postCountsByRestaurant[item.id] ? (
+                  <View style={styles.mapMarkerActivityBadge}>
+                    <Text style={styles.mapMarkerActivityText}>{Math.min(9, postCountsByRestaurant[item.id])}</Text>
+                  </View>
+                ) : null}
+              </View>
+            </Marker>
           ))}
         </MapView>
+        <Pressable accessibilityRole="button" accessibilityLabel="Usar minha localização" onPress={onLocate} style={styles.mapLocateFloat}>
+          <Ionicons name="locate" size={23} color={colors.ink} />
+        </Pressable>
         {renderSelectedMapCard()}
       </View>
     );
@@ -1188,7 +1288,8 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
               top: tile.top,
               width: webMapTileSize,
               height: webMapTileSize,
-              userSelect: 'none'
+              userSelect: 'none',
+              filter: 'saturate(0.72) contrast(0.92) brightness(1.06)'
             }
           }))}
           <View pointerEvents="none" style={styles.webMapScrim} />
@@ -1210,8 +1311,14 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
               style={[styles.webMapMarker, { left: point.left, top: point.top }]}
             >
               <View style={[styles.webMapMarkerDot, selectedMapItem?.id === item.id && styles.webMapMarkerDotSelected]}>
-                <Text style={styles.webMapMarkerLetter}>d</Text>
+                <Image source={imageSource(item.logo || item.coverPhoto || item.image)} style={styles.webMapMarkerPhoto} />
               </View>
+              <View style={[styles.webMapMarkerTip, selectedMapItem?.id === item.id && styles.webMapMarkerTipSelected]} />
+              {postCountsByRestaurant[item.id] ? (
+                <View style={styles.mapMarkerActivityBadge}>
+                  <Text style={styles.mapMarkerActivityText}>{Math.min(9, postCountsByRestaurant[item.id])}</Text>
+                </View>
+              ) : null}
             </Pressable>
           );
         })}
@@ -1226,8 +1333,11 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
             ]}
           />
         ) : null}
+        <Pressable accessibilityRole="button" accessibilityLabel="Usar minha localização" onPress={onLocate} style={styles.mapLocateFloat}>
+          <Ionicons name="locate" size={23} color={colors.ink} />
+        </Pressable>
         {renderSelectedMapCard()}
-        <Text style={styles.webMapAttribution}>Map data: OpenStreetMap</Text>
+        <Text style={styles.webMapAttribution}>© OpenStreetMap</Text>
       </View>
     );
   }
@@ -1329,6 +1439,7 @@ export default function App() {
   const [feedReactions, setFeedReactions] = useState({});
   const [feedCommentDrafts, setFeedCommentDrafts] = useState({});
   const [feedPhotoIndexes, setFeedPhotoIndexes] = useState({});
+  const [feedMode, setFeedMode] = useState('Para você');
   const [customFeedPosts, setCustomFeedPosts] = useState([]);
   const [selectedFeedProfile, setSelectedFeedProfile] = useState(null);
   const [selectedFeedPost, setSelectedFeedPost] = useState(null);
@@ -1626,7 +1737,7 @@ export default function App() {
           distanceFromAreaKm: distanceFromArea
         };
       })
-      .filter((item) => !needle || normalize(`${item.name} ${item.type} ${item.district} ${item.address}`).includes(needle))
+      .filter((item) => !needle || matchesRestaurantQuery(item, query))
       .filter((item) => matchesQuickFilter(item, selectedCategory))
       .filter((item) => !Number.isFinite(item.distanceFromAreaKm) || item.distanceFromAreaKm <= radiusKm)
       .sort((a, b) => {
@@ -1690,6 +1801,12 @@ export default function App() {
       return !keys.some((key) => blocked.has(key));
     });
   }, [customFeedPosts, generatedFeedPosts, currentUser?.blockedAccounts]);
+  const postCountsByRestaurant = useMemo(() => feedPosts.reduce((counts, post) => {
+    const restaurantId = post.restaurantId || post.restaurant?.id;
+    if (!restaurantId) return counts;
+    counts[restaurantId] = (counts[restaurantId] || 0) + 1;
+    return counts;
+  }, {}), [feedPosts]);
   const trendingLists = useMemo(() => {
     const definitions = [
       { title: 'Melhores hamburguerias', icon: 'fast-food-outline', terms: ['hamburgueria', 'hamburguer', 'burger', 'smash'] },
@@ -1936,7 +2053,8 @@ export default function App() {
       caption: '',
       restaurantId: '',
       restaurantName: '',
-      photos: []
+      photos: [],
+      checkIn: false
     });
     setFeedComposerOpen(true);
   }
@@ -2032,6 +2150,7 @@ export default function App() {
       images: photos,
       title: restaurant.name,
       caption,
+      kind: feedDraft.checkIn ? 'checkin' : 'discovery',
       createdAt: new Date().toISOString(),
       location: `${restaurant.district} • ${restaurant.type}`,
       likes: 0,
@@ -2042,6 +2161,7 @@ export default function App() {
     setFeedPhotoIndexes((current) => ({ ...current, [post.id]: 0 }));
     setFeedComposerOpen(false);
     setTab('Feed');
+    if (feedDraft.checkIn && restaurant.id) awardPoints('known', restaurant.id);
     createFeedPostInDb(post, currentUser || { id: 'visitor-feed', name: 'Visitante' }).catch(() => {});
   }
 
@@ -2736,6 +2856,54 @@ export default function App() {
     Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${item.name} ${item.address} São José do Rio Preto SP`)}`);
   }
 
+  function showRestaurantOnMap(item) {
+    const coordinate = item.coordinate || coordinateForRestaurant(item);
+    setQuery('');
+    setSelectedCategory('');
+    setMapRegion({
+      ...coordinate,
+      latitudeDelta: 0.025,
+      longitudeDelta: 0.022
+    });
+    setSelectedArea(item.district || 'Área do mapa');
+    setActiveScreen(null);
+    setTab('Mapa');
+  }
+
+  function startRestaurantCheckIn(item) {
+    if (!currentUser && !requireLogin({ type: 'feed-composer' })) return;
+    setFeedDraft({
+      caption: `Check-in no ${item.name}. O que vale a pena pedir por aqui?`,
+      restaurantId: item.id,
+      restaurantName: item.name,
+      photos: [],
+      checkIn: true
+    });
+    setSelectedRestaurant(null);
+    setFeedComposerOpen(true);
+  }
+
+  function shareCollection(collection, items) {
+    const names = items.slice(0, 5).map((item) => item.name).join(', ');
+    Share.share({
+      message: `${collection.title} no Dine${names ? `: ${names}` : ''}.`
+    }).catch(() => {});
+  }
+
+  function openCollectionRoute(items) {
+    if (!items.length) return;
+    const destination = items[items.length - 1];
+    const waypoints = items.slice(0, -1).slice(0, 7)
+      .map((item) => `${item.name} ${item.address || item.district || ''}`)
+      .join('|');
+    const params = [
+      'api=1',
+      `destination=${encodeURIComponent(`${destination.name} ${destination.address || destination.district || ''}`)}`,
+      waypoints ? `waypoints=${encodeURIComponent(waypoints)}` : ''
+    ].filter(Boolean).join('&');
+    Linking.openURL(`https://www.google.com/maps/dir/?${params}`);
+  }
+
   function openWhatsApp(item, reserve = false) {
     recordRestaurantMetricInDb(item.id, reserve ? 'reservationClicks' : 'whatsappClicks').catch(() => {});
     const message = reserve ? `Olá, quero reservar uma mesa no ${item.name}.` : `Olá, encontrei vocês pelo Dine.`;
@@ -3070,31 +3238,45 @@ function postKey(restaurantId, postId) {
   function renderSearch() {
     return (
       <View style={styles.mapPage}>
-        <View style={styles.mapTopBar}>
-          <BrandLogo />
-          <Text style={styles.mapPageTitle}>Mapa</Text>
-          <View style={styles.mapTopActions}>
-            <Pressable onPress={requestUserLocation} style={styles.mapTopButton}>
-              <Ionicons name="locate-outline" size={22} color={colors.ink} />
-            </Pressable>
-            <Pressable onPress={() => setFiltersOpen((value) => !value)} style={styles.mapTopButton}>
-              <Ionicons name="options-outline" size={22} color={colors.ink} />
-            </Pressable>
-          </View>
-        </View>
-        <View style={styles.searchPageField}>
+        <View style={styles.mapSearchHeader}>
+          <View style={styles.searchPageField}>
           <Ionicons name="search-outline" size={21} color={colors.muted} />
-          <TextInput value={query} onChangeText={setQuery} placeholder="Buscar nesta área" placeholderTextColor="#8A8179" style={styles.pageInput} />
-          <Pressable accessibilityRole="button" accessibilityState={{ expanded: filtersOpen }} accessibilityLabel="Abrir filtros de busca" hitSlop={6} onPress={() => setFiltersOpen((value) => !value)} style={[styles.searchFilterButton, filtersOpen && styles.searchFilterButtonActive]}>
-            <Ionicons name="options-outline" size={22} color={filtersOpen ? colors.card : colors.ink} />
+            <TextInput value={query} onChangeText={setQuery} placeholder="Onde vamos comer?" placeholderTextColor="#8A8179" style={styles.pageInput} />
+          </View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Abrir meu perfil" onPress={() => setTab('Perfil')} style={styles.mapProfileAvatar}>
+            {currentUser?.photo ? (
+              <Image source={imageSource(currentUser.photo)} style={styles.mapProfileAvatarImage} />
+            ) : (
+              <Text style={styles.mapProfileAvatarText}>{initialsForName(currentUser?.name, 'D')}</Text>
+            )}
           </Pressable>
         </View>
-        <View style={styles.filterSummary}>
-          <Ionicons name="location-outline" size={16} color={colors.redDark} />
-          <Text numberOfLines={1} style={styles.filterSummaryText}>{selectedArea} • raio de {radiusKm} km{selectedCategory ? ` • ${selectedCategory}` : ''}</Text>
-        </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mapQuickFilters}>
+          {[
+            ['Perto de mim', 'navigate', selectedArea === 'Perto de mim' || radiusKm === 1, requestUserLocation],
+            ['Aberto agora', 'time-outline', selectedCategory === 'Aberto agora', () => setSelectedCategory(selectedCategory === 'Aberto agora' ? '' : 'Aberto agora')],
+            ['Cozinha', 'restaurant-outline', Boolean(selectedCategory && !['Aberto agora', 'Até R$80'].includes(selectedCategory)), () => setFiltersOpen((value) => !value)],
+            ['Preço', 'cash-outline', selectedCategory === 'Até R$80', () => setSelectedCategory(selectedCategory === 'Até R$80' ? '' : 'Até R$80')]
+          ].map(([label, icon, active, onPress]) => (
+            <Pressable
+              key={label}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              onPress={onPress}
+              style={[styles.mapQuickFilter, active && styles.mapQuickFilterActive]}
+            >
+              <Ionicons name={icon} size={17} color={active ? colors.redDark : colors.ink} />
+              <Text style={[styles.mapQuickFilterText, active && styles.mapQuickFilterTextActive]}>{label}</Text>
+              {['Cozinha', 'Preço'].includes(label) ? <Ionicons name="chevron-down" size={14} color={active ? colors.redDark : colors.muted} /> : null}
+            </Pressable>
+          ))}
+        </ScrollView>
         {filtersOpen ? (
           <View style={styles.filterDrawer}>
+            <View style={styles.filterSummary}>
+              <Ionicons name="location-outline" size={16} color={colors.redDark} />
+              <Text numberOfLines={1} style={styles.filterSummaryText}>{selectedArea} • raio de {radiusKm} km{selectedCategory ? ` • ${selectedCategory}` : ''}</Text>
+            </View>
             <View style={styles.locationPanel}>
               <View style={styles.locationPanelCopy}>
                 <Text style={styles.locationPanelTitle}>{selectedArea}</Text>
@@ -3151,25 +3333,14 @@ function postKey(restaurantId, postId) {
             </View>
           </View>
         ) : null}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mapQuickFilters}>
-          {[
-            ['Até 1 km', null],
-            ['Aberto agora', 'Aberto agora'],
-            ['4,5+', '4,5+'],
-            ['Reserva', 'Reserva']
-          ].map(([label, value]) => (
-            <Pressable
-              key={label}
-              onPress={() => value ? setSelectedCategory(selectedCategory === value ? '' : value) : setRadiusKm(1)}
-              style={[styles.mapQuickFilter, (value ? selectedCategory === value : radiusKm === 1) && styles.mapQuickFilterActive]}
-            >
-              <Text style={[styles.mapQuickFilterText, (value ? selectedCategory === value : radiusKm === 1) && styles.mapQuickFilterTextActive]}>{label}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
         <PartnerMap
           restaurants={filteredRestaurants.slice(0, 12)}
           onSelect={setSelectedRestaurant}
+          onFavorite={toggleFavorite}
+          onDirections={openMaps}
+          onLocate={requestUserLocation}
+          favoriteNames={favorites}
+          postCountsByRestaurant={postCountsByRestaurant}
           region={mapRegion}
           onRegionChange={handleMapRegionChange}
           userLocation={userLocation}
@@ -3304,6 +3475,22 @@ function postKey(restaurantId, postId) {
           <Pressable accessibilityRole="button" accessibilityLabel={`Ver detalhes da publicacao de ${post.author}`} onPress={() => openFeedPost(post)}>
             <Text style={styles.feedCaption}><Text style={styles.feedCaptionAuthor}>{post.author} </Text>{post.caption || post.title}</Text>
           </Pressable>
+          {post.restaurant?.id && !String(post.restaurant.id).startsWith('custom-restaurant-') ? (
+            <View style={styles.feedPlaceActions}>
+              <Pressable onPress={() => showRestaurantOnMap(post.restaurant)} style={styles.feedPlaceAction}>
+                <Ionicons name="map-outline" size={16} color={colors.redDark} />
+                <Text style={styles.feedPlaceActionText}>Ver no mapa</Text>
+              </Pressable>
+              <Pressable onPress={() => toggleFavorite(post.restaurant.name)} style={styles.feedPlaceAction}>
+                <Ionicons name={favorites.includes(post.restaurant.name) ? 'bookmark' : 'bookmark-outline'} size={16} color={colors.redDark} />
+                <Text style={styles.feedPlaceActionText}>{favorites.includes(post.restaurant.name) ? 'Salvo' : 'Salvar lugar'}</Text>
+              </Pressable>
+              <Pressable onPress={() => openMaps(post.restaurant)} style={styles.feedPlaceAction}>
+                <Ionicons name="navigate-outline" size={16} color={colors.redDark} />
+                <Text style={styles.feedPlaceActionText}>Como chegar</Text>
+              </Pressable>
+            </View>
+          ) : null}
 
           <View style={styles.feedComments}>
             {comments.slice(0, 3).map((comment) => (
@@ -3333,6 +3520,10 @@ function postKey(restaurantId, postId) {
   }
 
   function renderFeed() {
+    const followedIds = new Set((currentUser?.followingProfiles || []).map((profile) => String(profile.id)));
+    const visibleFeedPosts = feedMode === 'Seguindo'
+      ? feedPosts.filter((post) => followedIds.has(String(post.authorId || post.authorProfile?.id)))
+      : feedPosts;
     return (
       <View style={styles.socialFeedPage}>
         <View style={styles.socialFeedHeader}>
@@ -3345,12 +3536,11 @@ function postKey(restaurantId, postId) {
           </View>
           <Text style={styles.socialFeedTitle}>Feed</Text>
           <View style={styles.socialFeedTabs}>
-            <View style={styles.socialFeedTabActive}>
-              <Text style={styles.socialFeedTabActiveText}>Para você</Text>
-            </View>
-            <Pressable style={styles.socialFeedTab}>
-              <Text style={styles.socialFeedTabText}>Seguindo</Text>
-            </Pressable>
+            {['Para você', 'Seguindo'].map((mode) => (
+              <Pressable key={mode} onPress={() => setFeedMode(mode)} style={feedMode === mode ? styles.socialFeedTabActive : styles.socialFeedTab}>
+                <Text style={feedMode === mode ? styles.socialFeedTabActiveText : styles.socialFeedTabText}>{mode}</Text>
+              </Pressable>
+            ))}
           </View>
         </View>
         <View style={styles.feedComposerCard}>
@@ -3369,7 +3559,13 @@ function postKey(restaurantId, postId) {
           </Pressable>
         </View>
         <View style={styles.feedList}>
-          {feedPosts.map(renderFeedPost)}
+          {visibleFeedPosts.length ? visibleFeedPosts.map(renderFeedPost) : (
+            <View style={styles.feedFollowingEmpty}>
+              <Ionicons name="people-outline" size={26} color={colors.redDark} />
+              <Text style={styles.feedFollowingEmptyTitle}>Seu feed de seguindo está começando</Text>
+              <Text style={styles.feedFollowingEmptyText}>Abra um perfil pelo feed e siga pessoas para acompanhar novas descobertas.</Text>
+            </View>
+          )}
         </View>
       </View>
     );
@@ -3850,6 +4046,8 @@ function postKey(restaurantId, postId) {
     const visibleBadges = achievementRules.slice(0, 5);
     const reviewTotal = Math.max(userReviews.length, gamification.metrics.reviews || 0);
     const authoredPosts = feedPosts.filter((post) => currentUser?.id && String(post.authorId) === String(currentUser.id));
+    const visitedRestaurantIds = new Set(gamification.awarded?.known || []);
+    const visitedRestaurants = publicRestaurants.filter((restaurant) => visitedRestaurantIds.has(restaurant.id)).slice(0, 5);
     const profileMedia = [
       ...authoredPosts.map((post) => ({ id: post.id, image: post.images?.[0] || post.image, post })),
       ...profileReviews.map((review) => ({ id: `review-${review.id}`, image: review.image, restaurant: review.restaurant }))
@@ -3957,6 +4155,31 @@ function postKey(restaurantId, postId) {
             <Ionicons name="bookmark-outline" size={18} color={colors.ink} />
             <Text style={styles.profileSavedActionText}>Salvos</Text>
           </Pressable>
+        </View>
+
+        <View style={styles.profileFoodMap}>
+          <View style={styles.profileFoodMapHeader}>
+            <View style={styles.profileFoodMapIcon}>
+              <Ionicons name="map-outline" size={21} color={colors.redDark} />
+            </View>
+            <View style={styles.profileFoodMapCopy}>
+              <Text style={styles.profileFoodMapTitle}>Meu mapa gastronômico</Text>
+              <Text style={styles.profileFoodMapText}>{Math.max(visitedRestaurantIds.size, gamification.metrics.known || 0)} lugares visitados</Text>
+            </View>
+            <Pressable onPress={() => { setActiveScreen(null); setTab('Mapa'); }} style={styles.profileFoodMapButton}>
+              <Text style={styles.profileFoodMapButtonText}>Abrir mapa</Text>
+            </Pressable>
+          </View>
+          {visitedRestaurants.length ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.profileFoodMapPlaces}>
+              {visitedRestaurants.map((restaurant) => (
+                <Pressable key={restaurant.id} onPress={() => showRestaurantOnMap(restaurant)} style={styles.profileFoodMapPlace}>
+                  <Image source={imageSource(restaurant.logo || restaurant.image)} style={styles.profileFoodMapPlaceImage} />
+                  <Text numberOfLines={1} style={styles.profileFoodMapPlaceName}>{restaurant.name}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          ) : null}
         </View>
 
         <View style={styles.profileContentTabs}>
@@ -4209,6 +4432,16 @@ function postKey(restaurantId, postId) {
       <View>
         {renderScreenHeader(collection.title || 'Coleção', collection.subtitle)}
         {collection.image ? <Image source={{ uri: collection.image }} style={styles.collectionHero} /> : null}
+        <View style={styles.collectionDetailActions}>
+          <Pressable onPress={() => shareCollection(collection, items)} style={styles.collectionDetailAction}>
+            <Ionicons name="share-social-outline" size={19} color={colors.ink} />
+            <Text style={styles.collectionDetailActionText}>Compartilhar</Text>
+          </Pressable>
+          <Pressable onPress={() => openCollectionRoute(items)} style={[styles.collectionDetailAction, styles.collectionDetailActionPrimary]}>
+            <Ionicons name="navigate-outline" size={19} color={colors.card} />
+            <Text style={[styles.collectionDetailActionText, styles.collectionDetailActionTextPrimary]}>Criar rota</Text>
+          </Pressable>
+        </View>
         <View style={styles.listStack}>
           {items.length ? items.map((item) => <MiniRestaurant key={item.id} item={item} onPress={setSelectedRestaurant} />) : (
             <View style={styles.emptyState}>
@@ -5494,6 +5727,12 @@ function postKey(restaurantId, postId) {
         onPinReview={toggleReviewPin}
         onRemoveReview={removeReview}
         onKnown={markRestaurantKnown}
+        onCheckIn={startRestaurantCheckIn}
+        communityPosts={selectedRestaurant ? feedPosts.filter((post) => String(post.restaurantId || post.restaurant?.id) === String(selectedRestaurant.id)) : []}
+        onOpenCommunityPost={(post) => {
+          setSelectedRestaurant(null);
+          setSelectedFeedPost(post);
+        }}
         currentUser={currentUser}
         isAdmin={isAdmin}
         favorite={selectedRestaurant && favorites.includes(selectedRestaurant.name)}
@@ -5789,6 +6028,9 @@ function RestaurantModal({
   onPinReview,
   onRemoveReview,
   onKnown,
+  onCheckIn,
+  communityPosts = [],
+  onOpenCommunityPost,
   currentUser,
   isAdmin,
   favorite,
@@ -5798,7 +6040,10 @@ function RestaurantModal({
   const [activeDetailTab, setActiveDetailTab] = useState('Cardápio');
   const [expandedMenuItem, setExpandedMenuItem] = useState(null);
   useEffect(() => {
-    if (item?.id) recordRestaurantMetricInDb(item.id, 'views').catch(() => {});
+    if (item?.id) {
+      setActiveDetailTab(communityPosts.length ? 'Comunidade' : 'Cardápio');
+      recordRestaurantMetricInDb(item.id, 'views').catch(() => {});
+    }
   }, [item?.id]);
   if (!item) return null;
   const openStatus = getRestaurantOpenStatus(item);
@@ -5815,7 +6060,7 @@ function RestaurantModal({
     item.price
   ].filter(Boolean).slice(0, 4);
   const menuItems = (item.menuItems || []).filter((dish) => dish?.name);
-  const tabs = ['Cardápio', 'Sobre', 'Avaliações'];
+  const tabs = ['Comunidade', 'Cardápio', 'Sobre', 'Avaliações'];
   const renderActionButton = (icon, label, onPress, active = false) => (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.detailActionButton, active && styles.detailActionButtonActive, pressed && styles.activePress]}>
       <Ionicons name={icon} size={18} color={active ? colors.card : colors.ink} />
@@ -5880,6 +6125,7 @@ function RestaurantModal({
             <View style={styles.detailActionRow}>
               {renderActionButton('navigate-outline', 'Como chegar', () => onMaps(item), true)}
               {renderActionButton('chatbubble-ellipses-outline', 'WhatsApp', () => onWhatsApp(item, false))}
+              {renderActionButton('camera-outline', 'Check-in', () => onCheckIn(item))}
               {renderActionButton('checkmark-circle-outline', 'Já conheci', () => onKnown(item))}
             </View>
 
@@ -5902,6 +6148,41 @@ function RestaurantModal({
                 </Pressable>
               ))}
             </View>
+
+            {activeDetailTab === 'Comunidade' ? (
+              <View style={styles.detailCommunitySection}>
+                <View style={styles.detailCommunityHeader}>
+                  <View>
+                    <Text style={styles.detailMenuEyebrow}>Comunidade Dine</Text>
+                    <Text style={styles.detailMenuTitle}>{communityPosts.length ? `${communityPosts.length} descobertas recentes` : 'Seja a primeira pessoa a publicar'}</Text>
+                  </View>
+                  <Pressable onPress={() => onCheckIn(item)} style={styles.detailCommunityCheckIn}>
+                    <Ionicons name="camera-outline" size={17} color={colors.card} />
+                    <Text style={styles.detailCommunityCheckInText}>Check-in</Text>
+                  </Pressable>
+                </View>
+                {communityPosts.length ? (
+                  <View style={styles.detailCommunityGrid}>
+                    {communityPosts.slice(0, 9).map((post) => (
+                      <Pressable key={post.id} onPress={() => onOpenCommunityPost?.(post)} style={styles.detailCommunityTile}>
+                        <Image source={imageSource(post.images?.[0] || post.image)} style={styles.detailCommunityImage} />
+                        {post.kind === 'checkin' ? (
+                          <View style={styles.detailCommunityBadge}>
+                            <Ionicons name="location" size={12} color="#FFFFFF" />
+                          </View>
+                        ) : null}
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : (
+                  <Pressable onPress={() => onCheckIn(item)} style={styles.detailCommunityEmpty}>
+                    <Ionicons name="images-outline" size={28} color={colors.redDark} />
+                    <Text style={styles.detailCommunityEmptyTitle}>Mostre sua experiência</Text>
+                    <Text style={styles.detailCommunityEmptyText}>Publique uma foto, marque o lugar e ajude outras pessoas a escolher.</Text>
+                  </Pressable>
+                )}
+              </View>
+            ) : null}
 
             {activeDetailTab === 'Cardápio' ? (
               <View style={styles.detailMenuTab}>
@@ -7900,33 +8181,53 @@ Object.assign(styles, {
   feedComposerTextInput: { minHeight: 104, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 12, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 14, textAlignVertical: 'top' },
   feedPickedPhotoWrap: { width: '48%', aspectRatio: 1, borderRadius: 8, overflow: 'hidden', backgroundColor: colors.surface },
   feedPickPhotoCard: { width: '48%', aspectRatio: 1, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(241,61,11,0.42)', backgroundColor: '#FFF4EF', alignItems: 'center', justifyContent: 'center', gap: 5, padding: 10 },
-  realMapCard: { height: 510, marginHorizontal: -18, backgroundColor: '#EAF0E5', overflow: 'hidden' },
-  mapCard: { height: 510, marginHorizontal: -18, backgroundColor: '#EAF0E5', overflow: 'hidden' },
-  webMapMarker: { position: 'absolute', zIndex: 5, width: 44, height: 52, marginLeft: -22, marginTop: -46, alignItems: 'center', justifyContent: 'flex-start' },
-  webMapMarkerDot: { width: 36, height: 36, borderRadius: 18, marginTop: 0, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: colors.card, shadowColor: colors.ink, shadowOpacity: 0.18, shadowRadius: 8, elevation: 5 },
-  webMapMarkerDotSelected: { width: 42, height: 42, borderRadius: 21, borderColor: '#FFFFFF', shadowOpacity: 0.28 },
-  webMapMarkerLetter: { color: '#FFFFFF', fontFamily: titleFont, fontSize: 18, lineHeight: 21 },
-  selectedMapCard: { position: 'absolute', left: 14, right: 14, bottom: 14, zIndex: 9, minHeight: 98, borderRadius: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.line, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 11, shadowColor: colors.ink, shadowOpacity: 0.18, shadowRadius: 16, elevation: 8 },
-  selectedMapImage: { width: 84, height: 78, borderRadius: 7, backgroundColor: colors.surface },
-  selectedMapCopy: { flex: 1, minWidth: 0, gap: 3 },
-  selectedMapName: { color: colors.ink, fontFamily: titleFont, fontSize: 17, lineHeight: 21 },
-  selectedMapMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11 },
-  selectedMapStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  realMapCard: { height: 560, marginHorizontal: -18, backgroundColor: '#EDF2EA', overflow: 'hidden' },
+  mapCard: { height: 560, marginHorizontal: -18, backgroundColor: '#EDF2EA', overflow: 'hidden' },
+  webMapScrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(255,250,244,0.12)' },
+  webMapAttribution: { position: 'absolute', right: 8, top: 8, zIndex: 4, paddingHorizontal: 6, paddingVertical: 3, backgroundColor: 'rgba(255,255,255,0.88)', color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9 },
+  mapCompass: { position: 'absolute', left: 10, top: 8, zIndex: 4, minHeight: 30, borderRadius: 15, paddingHorizontal: 10, gap: 5, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.9)', borderWidth: 1, borderColor: colors.line },
+  webMapMarker: { position: 'absolute', zIndex: 5, width: 50, height: 62, marginLeft: -25, marginTop: -58, alignItems: 'center', justifyContent: 'flex-start' },
+  webMapMarkerDot: { width: 42, height: 42, borderRadius: 21, overflow: 'hidden', backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: colors.redDark, shadowColor: colors.ink, shadowOpacity: 0.2, shadowRadius: 8, elevation: 5 },
+  webMapMarkerDotSelected: { width: 48, height: 48, borderRadius: 24, borderWidth: 4, borderColor: colors.redDark, shadowOpacity: 0.3 },
+  webMapMarkerPhoto: { width: '100%', height: '100%' },
+  webMapMarkerTip: { marginTop: -2, width: 0, height: 0, borderLeftWidth: 7, borderRightWidth: 7, borderTopWidth: 12, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: colors.redDark },
+  webMapMarkerTipSelected: { borderLeftWidth: 8, borderRightWidth: 8, borderTopWidth: 14 },
+  nativeMapMarker: { width: 48, height: 59, alignItems: 'center' },
+  nativeMapMarkerSelected: { width: 54, height: 65 },
+  nativeMapMarkerPhotoWrap: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', backgroundColor: colors.card, borderWidth: 3, borderColor: colors.redDark, shadowColor: colors.ink, shadowOpacity: 0.2, shadowRadius: 7, elevation: 5 },
+  nativeMapMarkerPhoto: { width: '100%', height: '100%' },
+  nativeMapMarkerTip: { marginTop: -2, width: 0, height: 0, borderLeftWidth: 7, borderRightWidth: 7, borderTopWidth: 12, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: colors.redDark },
+  selectedMapCard: { position: 'absolute', left: 12, right: 12, bottom: 12, zIndex: 9, minHeight: 146, borderRadius: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.line, padding: 9, shadowColor: colors.ink, shadowOpacity: 0.18, shadowRadius: 16, elevation: 8 },
+  selectedMapMain: { flexDirection: 'row', alignItems: 'stretch', gap: 11 },
+  selectedMapImage: { width: 94, minHeight: 82, borderRadius: 7, backgroundColor: colors.surface },
+  selectedMapCopy: { flex: 1, minWidth: 0, paddingTop: 2, gap: 2 },
+  selectedMapTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  selectedMapName: { flex: 1, minWidth: 0, color: colors.ink, fontFamily: titleFont, fontSize: 18, lineHeight: 22 },
+  selectedMapSave: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
+  selectedMapMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12 },
+  selectedMapStatusRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', columnGap: 4, rowGap: 1, marginTop: 5 },
   selectedMapRating: { color: colors.ink, fontFamily: bodyFont, fontSize: 11 },
-  selectedMapStatus: { color: colors.muted, fontFamily: bodyFont, fontSize: 11, marginLeft: 5 },
+  selectedMapDivider: { color: '#A9A4A0', fontFamily: bodyFont, fontSize: 10 },
+  selectedMapStatus: { color: colors.muted, fontFamily: bodyFont, fontSize: 11 },
   selectedMapStatusOpen: { color: colors.green },
-  selectedMapRoute: { width: 38, height: 38, borderRadius: 7, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
-  mapPage: { paddingTop: 4 },
+  selectedMapRoute: { minHeight: 40, marginLeft: 105, marginTop: 8, borderRadius: 7, backgroundColor: colors.redDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  selectedMapRouteText: { color: '#FFFFFF', fontFamily: bodyFont, fontSize: 13 },
+  mapLocateFloat: { position: 'absolute', right: 14, bottom: 174, zIndex: 8, width: 46, height: 46, borderRadius: 23, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center', shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 10, elevation: 7 },
+  mapPage: { paddingTop: 10 },
+  mapSearchHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 2 },
+  mapProfileAvatar: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: colors.card },
+  mapProfileAvatarImage: { width: '100%', height: '100%' },
+  mapProfileAvatarText: { color: colors.card, fontFamily: bodyFont, fontSize: 14 },
   mapTopBar: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', position: 'relative' },
   mapPageTitle: { position: 'absolute', left: 92, right: 92, textAlign: 'center', color: colors.ink, fontFamily: titleFont, fontSize: 20 },
   mapTopActions: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   mapTopButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
   mapQuickFilters: { gap: 8, paddingTop: 10, paddingBottom: 12, paddingRight: 18 },
-  mapQuickFilter: { minHeight: 36, paddingHorizontal: 13, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' },
-  mapQuickFilterActive: { backgroundColor: colors.greenSoft, borderColor: 'rgba(33,138,75,0.35)' },
+  mapQuickFilter: { minHeight: 38, paddingHorizontal: 12, borderRadius: 19, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  mapQuickFilterActive: { backgroundColor: '#FFF1EC', borderColor: 'rgba(241,61,11,0.4)' },
   mapQuickFilterText: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
-  mapQuickFilterTextActive: { color: colors.green },
-  searchPageField: { minHeight: 48, borderRadius: 8, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, flexDirection: 'row', alignItems: 'center', gap: 9, paddingLeft: 13, paddingRight: 5 },
+  mapQuickFilterTextActive: { color: colors.redDark },
+  searchPageField: { flex: 1, minWidth: 0, minHeight: 48, borderRadius: 8, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 13 },
   pageInput: { flex: 1, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 14 },
   searchFilterButton: { width: 38, height: 38, borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card },
   mapSheet: { marginHorizontal: -18, marginTop: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0, backgroundColor: colors.bg, paddingHorizontal: 18, paddingTop: 14, paddingBottom: 24 },
@@ -8075,6 +8376,43 @@ Object.assign(styles, {
   navButton: { flex: 1, minWidth: 0, height: 54, borderRadius: 0, alignItems: 'center', justifyContent: 'center', gap: 3 },
   navButtonActive: { backgroundColor: 'transparent' },
   navText: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 10 },
+  selectedMapSocialMeta: { color: colors.redDark, fontFamily: bodyFont, fontSize: 10, marginTop: 1 },
+  mapMarkerActivityBadge: { position: 'absolute', right: -3, top: -4, zIndex: 3, minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, backgroundColor: colors.redDark, borderWidth: 2, borderColor: colors.card, alignItems: 'center', justifyContent: 'center' },
+  mapMarkerActivityText: { color: colors.card, fontFamily: bodyFont, fontSize: 9, lineHeight: 10 },
+  feedPlaceActions: { flexDirection: 'row', gap: 6, marginTop: 3 },
+  feedPlaceAction: { flex: 1, minWidth: 0, minHeight: 34, borderRadius: 7, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 5, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  feedPlaceActionText: { color: colors.ink, fontFamily: bodyFont, fontSize: 9, textAlign: 'center' },
+  feedFollowingEmpty: { minHeight: 230, padding: 28, alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: colors.card },
+  feedFollowingEmptyTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 17, textAlign: 'center' },
+  feedFollowingEmptyText: { maxWidth: 320, color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  detailCommunitySection: { gap: 12 },
+  detailCommunityHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  detailCommunityCheckIn: { minHeight: 38, borderRadius: 7, backgroundColor: colors.redDark, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  detailCommunityCheckInText: { color: colors.card, fontFamily: bodyFont, fontSize: 12 },
+  detailCommunityGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 2 },
+  detailCommunityTile: { width: '32.8%', aspectRatio: 1, overflow: 'hidden', backgroundColor: colors.surface, position: 'relative' },
+  detailCommunityImage: { width: '100%', height: '100%' },
+  detailCommunityBadge: { position: 'absolute', left: 6, bottom: 6, width: 24, height: 24, borderRadius: 12, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  detailCommunityEmpty: { minHeight: 150, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(241,61,11,0.34)', backgroundColor: '#FFF7F3', padding: 20, alignItems: 'center', justifyContent: 'center', gap: 5 },
+  detailCommunityEmptyTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 16, textAlign: 'center' },
+  detailCommunityEmptyText: { maxWidth: 310, color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, textAlign: 'center' },
+  collectionDetailActions: { flexDirection: 'row', gap: 8, marginTop: -7, marginBottom: 15 },
+  collectionDetailAction: { flex: 1, minHeight: 42, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  collectionDetailActionPrimary: { backgroundColor: colors.redDark, borderColor: colors.redDark },
+  collectionDetailActionText: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  collectionDetailActionTextPrimary: { color: colors.card },
+  profileFoodMap: { borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 11, marginBottom: 14, gap: 10 },
+  profileFoodMapHeader: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  profileFoodMapIcon: { width: 38, height: 38, borderRadius: 8, backgroundColor: '#FFF1EC', alignItems: 'center', justifyContent: 'center' },
+  profileFoodMapCopy: { flex: 1, minWidth: 0 },
+  profileFoodMapTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 14 },
+  profileFoodMapText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, marginTop: 1 },
+  profileFoodMapButton: { minHeight: 34, borderRadius: 7, borderWidth: 1, borderColor: colors.redDark, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  profileFoodMapButtonText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 10 },
+  profileFoodMapPlaces: { gap: 8, paddingRight: 8 },
+  profileFoodMapPlace: { width: 76, gap: 3 },
+  profileFoodMapPlaceImage: { width: 76, height: 56, borderRadius: 7, backgroundColor: colors.surface },
+  profileFoodMapPlaceName: { color: colors.ink, fontFamily: bodyFont, fontSize: 9 },
   settingsDangerZone: { marginTop: 2, marginBottom: 20 },
   settingsLogoutButton: { minHeight: 50, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(200,70,37,0.28)', backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   settingsLogoutText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 14 }
