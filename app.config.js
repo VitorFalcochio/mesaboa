@@ -35,6 +35,10 @@ module.exports = ({ config }) => {
         ...config.android?.config,
         ...(googleMapsApiKey ? { googleMaps: { apiKey: googleMapsApiKey } } : {})
       }
+    },
+    web: {
+      ...config.web,
+      favicon: './Designer/Logos/2.png'
     }
   };
 };
