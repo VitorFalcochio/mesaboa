@@ -284,6 +284,7 @@ const titleFont = Platform.select({ ios: 'Georgia', android: 'serif', default: '
 const bodyFont = 'Nunito_700Bold';
 
 const dineLogo = require('./Designer/Logos/2.png');
+const authFoodImage = require('./assets/auth-login-food.jpg');
 const onboardingSlides = [
   {
     title: 'Descubra lugares perto de voce',
@@ -1249,6 +1250,7 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedRestaurant, setSelectedRestaurant] = useState(null);
   const [authMode, setAuthMode] = useState(null);
+  const [authError, setAuthError] = useState('');
   const [pendingAction, setPendingAction] = useState(null);
   const [form, setForm] = useState({});
   const [hydrated, setHydrated] = useState(false);
@@ -2540,23 +2542,24 @@ export default function App() {
     if (authSubmitting) return;
     const email = normalize(form.email).trim();
     const password = String(form.password || '');
+    setAuthError('');
     if (!email || !password) {
-      Alert.alert('Campos obrigatórios', 'Informe e-mail e senha para continuar.');
+      setAuthError('Informe seu e-mail e sua senha para continuar.');
       return;
     }
     if (!isValidEmail(email)) {
-      Alert.alert('E-mail inválido', 'Digite um endereço de e-mail válido.');
+      setAuthError('Digite um endereço de e-mail válido.');
       return;
     }
     setAuthSubmitting(true);
     try {
     if (authMode === 'signup') {
       if (!form.name || password.length < 6) {
-        Alert.alert('Cadastro', 'Informe seu nome e uma senha com pelo menos 6 caracteres.');
+        setAuthError('Informe seu nome e use uma senha com pelo menos 6 caracteres.');
         return;
       }
       if (users.some((user) => normalize(user.email) === email)) {
-        Alert.alert('Cadastro', 'Este e-mail já está cadastrado.');
+        setAuthError('Este e-mail já está cadastrado. Entre com sua senha.');
         return;
       }
       const now = new Date().toISOString();
@@ -2570,7 +2573,7 @@ export default function App() {
     }
     const found = users.find((user) => normalize(user.email) === email && user.password === password);
     if (!found) {
-      Alert.alert('Entrar', 'E-mail ou senha inválidos.');
+      setAuthError('E-mail ou senha inválidos.');
       return;
     }
     const user = normalizeDemoAccount({
@@ -5391,10 +5394,17 @@ function postKey(restaurantId, postId) {
       <AuthModal
         mode={authMode}
         form={form}
-        setForm={setForm}
-        setMode={setAuthMode}
+        setForm={(nextForm) => {
+          setAuthError('');
+          setForm(nextForm);
+        }}
+        setMode={(nextMode) => {
+          setAuthError('');
+          setAuthMode(nextMode);
+        }}
         onSubmitAuth={submitAuth}
         submitting={authSubmitting}
+        error={authError}
         required={!currentUser}
       />
       <OnboardingModal
@@ -6287,53 +6297,184 @@ function OnboardingModal({ visible, slides, index, onNext, onSkip }) {
   );
 }
 
-function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, submitting = false, required = false }) {
+function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, submitting = false, error = '', required = false }) {
+  const { width } = useWindowDimensions();
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const desktop = Platform.OS === 'web' && width >= 900;
+
   if (!mode) return null;
-  const title = mode === 'login' ? 'Acesse sua conta' : mode === 'signup' ? 'Comece no Dine' : 'Cadastrar restaurante';
+
+  const login = mode === 'login';
+  const title = login
+    ? 'Entre para descobrir seu próximo lugar favorito'
+    : 'Crie sua conta e compartilhe novas descobertas';
+
+  const content = (
+    <View style={styles.authFullForm}>
+      {!required ? (
+        <Pressable accessibilityRole="button" accessibilityLabel="Fechar" onPress={() => setMode(null)} style={styles.authCloseButton}>
+          <Ionicons name="close" size={22} color={colors.ink} />
+        </Pressable>
+      ) : null}
+
+      <Image source={dineLogo} style={styles.authLogo} resizeMode="contain" />
+      <Text style={styles.authTitle}>{title}</Text>
+      <Text style={styles.authSubtitle}>
+        {login ? 'Sua próxima experiência gastronômica começa aqui.' : 'Sua conta fica pronta na hora, sem confirmação por e-mail.'}
+      </Text>
+
+      <View accessibilityRole="tablist" style={styles.authModeTabs}>
+        {[
+          ['login', 'Entrar'],
+          ['signup', 'Criar conta']
+        ].map(([value, label]) => {
+          const active = mode === value;
+          return (
+            <Pressable
+              key={value}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
+              onPress={() => setMode(value)}
+              style={[styles.authModeTab, active && styles.authModeTabActive]}
+            >
+              <Text style={[styles.authModeTabText, active && styles.authModeTabTextActive]}>{label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <View style={styles.authFields}>
+        {!login ? (
+          <AuthField
+            label="Nome"
+            icon="person-outline"
+            value={form.name || ''}
+            onChangeText={(value) => setForm({ ...form, name: value })}
+            autoComplete="name"
+            textContentType="name"
+            returnKeyType="next"
+          />
+        ) : null}
+        <AuthField
+          label="E-mail"
+          icon="mail-outline"
+          value={form.email || ''}
+          onChangeText={(value) => setForm({ ...form, email: value })}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoCorrect={false}
+          autoComplete="email"
+          textContentType="emailAddress"
+          placeholder="voce@email.com"
+          returnKeyType="next"
+        />
+        <AuthField
+          label="Senha"
+          icon="lock-closed-outline"
+          value={form.password || ''}
+          onChangeText={(value) => setForm({ ...form, password: value })}
+          secureTextEntry={!passwordVisible}
+          autoComplete={login ? 'current-password' : 'new-password'}
+          textContentType={login ? 'password' : 'newPassword'}
+          placeholder={login ? 'Sua senha' : 'Mínimo de 6 caracteres'}
+          returnKeyType="done"
+          onSubmitEditing={onSubmitAuth}
+          trailing={(
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={passwordVisible ? 'Ocultar senha' : 'Mostrar senha'}
+              hitSlop={8}
+              onPress={() => setPasswordVisible((visible) => !visible)}
+              style={styles.authFieldAction}
+            >
+              <Ionicons name={passwordVisible ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.muted} />
+            </Pressable>
+          )}
+        />
+      </View>
+
+      {!login ? <Text style={styles.authPasswordHint}>Use pelo menos 6 caracteres.</Text> : null}
+      {error ? (
+        <View accessibilityRole="alert" style={styles.authError}>
+          <Ionicons name="alert-circle-outline" size={18} color={colors.redDark} />
+          <Text style={styles.authErrorText}>{error}</Text>
+        </View>
+      ) : null}
+
+      <AppButton disabled={submitting} onPress={onSubmitAuth} style={styles.authSubmitButton}>
+        {submitting ? 'Aguarde...' : login ? 'Entrar' : 'Criar minha conta'}
+      </AppButton>
+
+      <Pressable
+        accessibilityRole="button"
+        disabled={submitting}
+        onPress={() => setMode(login ? 'signup' : 'login')}
+        style={styles.authSwitchButton}
+      >
+        <Text style={styles.authSwitchText}>
+          {login ? 'Ainda não tem conta? ' : 'Já tem uma conta? '}
+          <Text style={styles.authSwitchAction}>{login ? 'Criar conta' : 'Entrar'}</Text>
+        </Text>
+      </Pressable>
+
+      <Text style={styles.authLegal}>
+        Ao continuar, você concorda com os Termos de Uso e a Política de Privacidade do Dine.
+      </Text>
+    </View>
+  );
+
   if (required) {
     return (
       <Modal visible animationType="fade" presentationStyle="fullScreen" onRequestClose={() => null}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.authFullBackdrop}>
-          <ScrollView contentContainerStyle={styles.authFullScreen} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-            <View style={styles.authFullForm}>
-              <Text style={styles.kicker}>{mode === 'login' ? 'Entrar' : 'Criar conta'}</Text>
-              <Text style={styles.pageTitleText}>{title}</Text>
-              <Text style={styles.panelText}>Entre ou crie uma conta para continuar.</Text>
-              {mode === 'signup' ? <Field label="Nome" value={form.name} onChangeText={(value) => setForm({ ...form, name: value })} /> : null}
-              <Field label="E-mail" value={form.email} onChangeText={(value) => setForm({ ...form, email: value })} keyboardType="email-address" autoCapitalize="none" />
-              <Field label="Senha" value={form.password} onChangeText={(value) => setForm({ ...form, password: value })} secureTextEntry />
-              <AppButton disabled={submitting} onPress={onSubmitAuth}>{submitting ? 'Aguarde...' : mode === 'login' ? 'Entrar' : 'Criar conta'}</AppButton>
-              <AppButton disabled={submitting} kind="secondary" onPress={() => setMode(mode === 'login' ? 'signup' : 'login')}>
-                {mode === 'login' ? 'Criar nova conta' : 'Já tenho conta'}
-              </AppButton>
+          <View style={[styles.authLayout, !desktop && styles.authLayoutMobile]}>
+            {desktop ? (
+              <View style={styles.authVisualPanel}>
+                <Image source={authFoodImage} style={styles.authVisualImage} resizeMode="cover" />
+                <View pointerEvents="none" style={styles.authVisualShade} />
+              </View>
+            ) : null}
+            <View style={styles.authFormPanel}>
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={[styles.authFormScrollContent, !desktop && styles.authFormScrollContentMobile]}
+              >
+                {content}
+              </ScrollView>
             </View>
-          </ScrollView>
+          </View>
         </KeyboardAvoidingView>
       </Modal>
     );
   }
+
   return (
-    <Modal visible transparent animationType="slide" onRequestClose={() => required ? null : setMode(null)}>
+    <Modal visible transparent animationType="slide" onRequestClose={() => setMode(null)}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBackdrop}>
-        <ScrollView contentContainerStyle={styles.authSheet}>
-          {!required ? (
-            <Pressable onPress={() => setMode(null)} style={styles.closeButton}>
-              <Ionicons name="close" size={22} color={colors.green} />
-            </Pressable>
-          ) : null}
-          <Text style={styles.kicker}>{mode === 'login' ? 'Entrar' : 'Criar conta'}</Text>
-          <Text style={styles.pageTitleText}>{title}</Text>
-          {required ? <Text style={styles.panelText}>Entre ou crie uma conta para continuar no Dine.</Text> : null}
-          {mode === 'signup' ? <Field label="Nome" value={form.name} onChangeText={(value) => setForm({ ...form, name: value })} /> : null}
-          <Field label="E-mail" value={form.email} onChangeText={(value) => setForm({ ...form, email: value })} keyboardType="email-address" autoCapitalize="none" />
-          <Field label="Senha" value={form.password} onChangeText={(value) => setForm({ ...form, password: value })} secureTextEntry />
-          <AppButton disabled={submitting} onPress={onSubmitAuth}>{submitting ? 'Aguarde...' : mode === 'login' ? 'Entrar' : 'Criar conta'}</AppButton>
-          <AppButton disabled={submitting} kind="secondary" onPress={() => setMode(mode === 'login' ? 'signup' : 'login')}>
-            {mode === 'login' ? 'Criar nova conta' : 'Já tenho conta'}
-          </AppButton>
+        <ScrollView contentContainerStyle={styles.authSheet} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          {content}
         </ScrollView>
       </KeyboardAvoidingView>
     </Modal>
+  );
+}
+
+function AuthField({ label, icon, trailing, ...props }) {
+  return (
+    <View style={styles.authField}>
+      <Text style={styles.authFieldLabel}>{label}</Text>
+      <View style={styles.authFieldInputWrap}>
+        <Ionicons name={icon} size={19} color={colors.muted} />
+        <TextInput
+          accessibilityLabel={props.accessibilityLabel || label}
+          placeholderTextColor="#918A82"
+          style={styles.authFieldInput}
+          {...props}
+        />
+        {trailing}
+      </View>
+    </View>
   );
 }
 
@@ -7426,9 +7567,40 @@ Object.assign(styles, {
   settingsToggleThumbActive: { transform: [{ translateX: 20 }] },
   optionRadio: { width: 30, height: 30, borderRadius: 15, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' },
   optionRadioActive: { backgroundColor: colors.redDark, borderColor: colors.redDark },
-  authFullBackdrop: { flex: 1, backgroundColor: colors.bg },
-  authFullScreen: { minHeight: '100%', paddingHorizontal: 20, paddingTop: Platform.OS === 'ios' ? 68 : 44, paddingBottom: 28, justifyContent: 'center', backgroundColor: colors.bg },
-  authFullForm: { width: '100%', gap: 12, paddingBottom: 8 },
+  authFullBackdrop: { flex: 1, backgroundColor: colors.surface },
+  authLayout: { flex: 1, minHeight: '100%', flexDirection: 'row', backgroundColor: colors.surface },
+  authLayoutMobile: { flexDirection: 'column' },
+  authVisualPanel: { width: '51%', minHeight: '100%', position: 'relative', overflow: 'hidden', backgroundColor: colors.ink },
+  authVisualImage: { width: '100%', height: '100%' },
+  authVisualShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(17, 29, 22, 0.08)' },
+  authFormPanel: { flex: 1, minWidth: 0, backgroundColor: colors.surface },
+  authFormScrollContent: { flexGrow: 1, justifyContent: 'center', paddingHorizontal: 48, paddingVertical: 40 },
+  authFormScrollContentMobile: { paddingHorizontal: 22, paddingTop: Platform.OS === 'ios' ? 58 : 36, paddingBottom: 32 },
+  authFullForm: { width: '100%', maxWidth: 430, alignSelf: 'center', gap: 0, position: 'relative' },
+  authLogo: { width: 118, height: 58, marginBottom: 22, alignSelf: 'flex-start' },
+  authTitle: { color: colors.ink, fontFamily: 'Nunito_800ExtraBold', fontSize: 31, lineHeight: 36, marginBottom: 10, letterSpacing: 0 },
+  authSubtitle: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 15, lineHeight: 22, marginBottom: 24 },
+  authCloseButton: { position: 'absolute', right: 0, top: 0, zIndex: 3, width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' },
+  authModeTabs: { height: 46, flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.line, marginBottom: 22 },
+  authModeTab: { flex: 1, minWidth: 0, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  authModeTabActive: { borderBottomColor: colors.redDark },
+  authModeTabText: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 14 },
+  authModeTabTextActive: { color: colors.ink, fontFamily: 'Nunito_800ExtraBold' },
+  authFields: { gap: 15 },
+  authField: { gap: 7 },
+  authFieldLabel: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 13 },
+  authFieldInputWrap: { minHeight: 52, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(40, 40, 43, 0.18)', backgroundColor: '#FFFFFF', paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  authFieldInput: { flex: 1, minWidth: 0, height: 50, paddingVertical: 0, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 15 },
+  authFieldAction: { width: 32, height: 40, alignItems: 'center', justifyContent: 'center' },
+  authPasswordHint: { marginTop: 8, color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12 },
+  authError: { marginTop: 14, minHeight: 42, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(200, 70, 37, 0.26)', backgroundColor: '#FFF1E8', paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  authErrorText: { flex: 1, minWidth: 0, color: colors.redDark, fontFamily: 'Nunito_700Bold', fontSize: 13, lineHeight: 18 },
+  authSubmitButton: { marginTop: 18, minHeight: 52, borderRadius: 8 },
+  authSwitchButton: { minHeight: 46, marginTop: 8, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
+  authSwitchText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 14, textAlign: 'center' },
+  authSwitchAction: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold' },
+  authLegal: { marginTop: 14, color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11, lineHeight: 17, textAlign: 'center' },
+  authSheet: { width: '100%', maxWidth: 520, maxHeight: '94%', marginTop: 'auto', alignSelf: 'center', borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: colors.surface, paddingHorizontal: 24, paddingTop: 30, paddingBottom: 24 },
   settingsDangerZone: { marginTop: 2, marginBottom: 20 },
   settingsLogoutButton: { minHeight: 50, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(200,70,37,0.28)', backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   settingsLogoutText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 14 }
