@@ -3,11 +3,11 @@ const { test, expect } = require('@playwright/test');
 async function createLocalAccount(page) {
   await page.goto('/');
   await page.getByText('Pular', { exact: true }).click();
-  await page.getByText('Criar nova conta', { exact: true }).click();
+  await page.getByRole('tab', { name: 'Criar conta' }).click();
   await page.getByLabel('Nome').fill('Teste Revisao');
   await page.getByLabel('E-mail').fill(`revisao-${Date.now()}@dine.test`);
-  await page.getByLabel('Senha').fill('senha-segura-123');
-  await page.getByRole('button', { name: 'Criar conta', exact: true }).click();
+  await page.locator('input[aria-label="Senha"]').fill('senha-segura-123');
+  await page.getByRole('button', { name: 'Criar minha conta', exact: true }).click();
   await expect(page.getByText('Explorar', { exact: true }).last()).toBeVisible();
 }
 
