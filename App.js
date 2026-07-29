@@ -727,6 +727,15 @@ function latitudeToTileY(latitude, zoom) {
   return (1 - Math.log(Math.tan(latRad) + (1 / Math.cos(latRad))) / Math.PI) / 2 * (2 ** zoom);
 }
 
+function tileXToLongitude(tileX, zoom) {
+  return (tileX / (2 ** zoom)) * 360 - 180;
+}
+
+function tileYToLatitude(tileY, zoom) {
+  const value = Math.PI - (2 * Math.PI * tileY) / (2 ** zoom);
+  return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(value) - Math.exp(-value)));
+}
+
 function webMapPoint(coordinate, region, width, height = 420) {
   const zoom = webMapZoom(region);
   const centerX = longitudeToTileX(region.longitude, zoom) * webMapTileSize;
@@ -969,6 +978,8 @@ function matchesQuickFilter(item, filter) {
 
 function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocation, locationGranted }) {
   const { width } = useWindowDimensions();
+  const dragStartRef = useRef(null);
+  const [webPanOffset, setWebPanOffset] = useState({ x: 0, y: 0 });
   const webMapWidth = Math.max(320, width);
   const webMapHeight = 420;
   const webMapRegion = region || rioPretoRegion;
@@ -983,10 +994,43 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
       webTiles.push({
         key: `${webMapZoomLevel}-${x}-${y}`,
         url: `https://tile.openstreetmap.org/${webMapZoomLevel}/${x}/${y}.png`,
-        left: x * webMapTileSize - webMapCenterPixelX + webMapWidth / 2,
-        top: y * webMapTileSize - webMapCenterPixelY + webMapHeight / 2
+        left: x * webMapTileSize - webMapCenterPixelX + webMapWidth / 2 + webPanOffset.x,
+        top: y * webMapTileSize - webMapCenterPixelY + webMapHeight / 2 + webPanOffset.y
       });
     }
+  }
+
+  function webPointForItem(item, index) {
+    const coordinate = item.coordinate || coordinateForRestaurant(item, index);
+    const point = webMapPoint(coordinate, webMapRegion, webMapWidth, webMapHeight);
+    return {
+      left: point.left + webPanOffset.x,
+      top: point.top + webPanOffset.y
+    };
+  }
+
+  function webMapEventPoint(event) {
+    const nativeEvent = event?.nativeEvent || {};
+    return {
+      x: Number(nativeEvent.pageX ?? nativeEvent.clientX ?? 0),
+      y: Number(nativeEvent.pageY ?? nativeEvent.clientY ?? 0)
+    };
+  }
+
+  function finishWebMapPan() {
+    if (!dragStartRef.current || (!webPanOffset.x && !webPanOffset.y)) {
+      dragStartRef.current = null;
+      return;
+    }
+    const nextCenterX = webMapCenterPixelX - webPanOffset.x;
+    const nextCenterY = webMapCenterPixelY - webPanOffset.y;
+    onRegionChange?.({
+      ...webMapRegion,
+      latitude: tileYToLatitude(nextCenterY / webMapTileSize, webMapZoomLevel),
+      longitude: tileXToLongitude(nextCenterX / webMapTileSize, webMapZoomLevel)
+    });
+    dragStartRef.current = null;
+    setWebPanOffset({ x: 0, y: 0 });
   }
 
   if (MapView && Marker) {
@@ -1026,21 +1070,41 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
   if (Platform.OS === 'web') {
     return (
       <View style={styles.mapCard}>
-        {webTiles.map((tile) => React.createElement('img', {
-          key: tile.key,
-          src: tile.url,
-          alt: '',
-          draggable: false,
-          style: {
-            position: 'absolute',
-            left: tile.left,
-            top: tile.top,
-            width: webMapTileSize,
-            height: webMapTileSize,
-            userSelect: 'none'
-          }
-        }))}
-        <View pointerEvents="none" style={styles.webMapScrim} />
+        <View
+          style={styles.webMapDragLayer}
+          onStartShouldSetResponder={() => true}
+          onMoveShouldSetResponder={() => true}
+          onResponderGrant={(event) => {
+            const point = webMapEventPoint(event);
+            dragStartRef.current = { ...point, startOffset: webPanOffset };
+          }}
+          onResponderMove={(event) => {
+            if (!dragStartRef.current) return;
+            const point = webMapEventPoint(event);
+            setWebPanOffset({
+              x: dragStartRef.current.startOffset.x + point.x - dragStartRef.current.x,
+              y: dragStartRef.current.startOffset.y + point.y - dragStartRef.current.y
+            });
+          }}
+          onResponderRelease={finishWebMapPan}
+          onResponderTerminate={finishWebMapPan}
+        >
+          {webTiles.map((tile) => React.createElement('img', {
+            key: tile.key,
+            src: tile.url,
+            alt: '',
+            draggable: false,
+            style: {
+              position: 'absolute',
+              left: tile.left,
+              top: tile.top,
+              width: webMapTileSize,
+              height: webMapTileSize,
+              userSelect: 'none'
+            }
+          }))}
+          <View pointerEvents="none" style={styles.webMapScrim} />
+        </View>
         <View style={styles.mapCompass}>
           <Ionicons name="navigate" size={16} color={colors.redDark} />
           <Text style={styles.mapCompassText}>Dine</Text>
@@ -1050,20 +1114,20 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
             key={item.id}
             onPress={() => onSelect(item)}
             style={[
-              styles.mapPin,
+              styles.webMapMarker,
               {
-                left: Math.max(12, Math.min(webMapWidth - 142, webMapPoint(item.coordinate || coordinateForRestaurant(item, index), webMapRegion, webMapWidth, webMapHeight).left - 18)),
-                top: Math.max(54, Math.min(webMapHeight - 86, webMapPoint(item.coordinate || coordinateForRestaurant(item, index), webMapRegion, webMapWidth, webMapHeight).top - 42))
+                left: Math.max(18, Math.min(webMapWidth - 18, webPointForItem(item, index).left)),
+                top: Math.max(62, Math.min(webMapHeight - 22, webPointForItem(item, index).top))
               }
             ]}
           >
-            <View style={[styles.mapPinBubble, index === 2 && styles.mapPinBubbleAlt]}>
-              <MaterialCommunityIcons name="silverware-fork-knife" size={16} color={colors.card} />
-            </View>
-            <View style={[styles.mapPinTip, index === 2 && styles.mapPinTipAlt]} />
-            <View style={styles.mapPinLabel}>
+            <View style={styles.webMapMarkerStem} />
+            <View style={styles.webMapMarkerCard}>
               <Text numberOfLines={1} style={styles.mapPinName}>{item.name}</Text>
               <Text numberOfLines={1} style={styles.mapPinMeta}>{Number.isFinite(item.distanceKm) ? formatDistance(item.distanceKm) : item.type}</Text>
+            </View>
+            <View style={[styles.webMapMarkerDot, index === 2 && styles.webMapMarkerDotAlt]}>
+              <MaterialCommunityIcons name="silverware-fork-knife" size={15} color={colors.card} />
             </View>
           </Pressable>
         ))}
@@ -1072,8 +1136,8 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
             style={[
               styles.userDot,
               {
-                left: Math.max(12, Math.min(webMapWidth - 28, webMapPoint(userLocation, webMapRegion, webMapWidth, webMapHeight).left - 12)),
-                top: Math.max(54, Math.min(webMapHeight - 28, webMapPoint(userLocation, webMapRegion, webMapWidth, webMapHeight).top - 12))
+                left: Math.max(12, Math.min(webMapWidth - 28, webMapPoint(userLocation, webMapRegion, webMapWidth, webMapHeight).left + webPanOffset.x - 12)),
+                top: Math.max(54, Math.min(webMapHeight - 28, webMapPoint(userLocation, webMapRegion, webMapWidth, webMapHeight).top + webPanOffset.y - 12))
               }
             ]}
           />
@@ -6542,9 +6606,15 @@ Object.assign(styles, {
   ownerActions: { flexDirection: 'row', gap: 10 },
   realMapCard: { height: 420, marginHorizontal: -22, backgroundColor: '#EAF0E1', overflow: 'hidden' },
   realMap: { flex: 1 },
-  mapCard: { height: 420, marginHorizontal: -22, backgroundColor: '#EAF0E1', overflow: 'hidden' },
-  webMapScrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(255, 246, 234, 0.08)' },
+  mapCard: { height: 420, marginHorizontal: -22, backgroundColor: '#DCE8D3', overflow: 'hidden' },
+  webMapDragLayer: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, cursor: 'grab' },
+  webMapScrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(255, 246, 234, 0.04)' },
   webMapAttribution: { position: 'absolute', right: 8, bottom: 28, zIndex: 4, paddingHorizontal: 6, paddingVertical: 3, backgroundColor: 'rgba(255,255,255,0.86)', color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10 },
+  webMapMarker: { position: 'absolute', zIndex: 5, width: 138, minHeight: 68, marginLeft: -69, marginTop: -68, alignItems: 'center' },
+  webMapMarkerCard: { minWidth: 118, maxWidth: 138, borderRadius: 12, backgroundColor: 'rgba(255, 253, 247, 0.97)', paddingVertical: 7, paddingHorizontal: 10, borderWidth: 1, borderColor: colors.line, shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 10, elevation: 5 },
+  webMapMarkerDot: { width: 34, height: 34, borderRadius: 17, marginTop: -2, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: colors.card, shadowColor: colors.ink, shadowOpacity: 0.18, shadowRadius: 8, elevation: 5 },
+  webMapMarkerDotAlt: { backgroundColor: colors.olive },
+  webMapMarkerStem: { position: 'absolute', left: 67, bottom: -1, width: 4, height: 18, borderRadius: 2, backgroundColor: colors.redDark, shadowColor: colors.ink, shadowOpacity: 0.1, shadowRadius: 4 },
   mapZone: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(40, 40, 43, 0.07)' },
   mapZoneNorth: { left: -26, top: -30, width: 210, height: 168, borderRadius: 36, backgroundColor: '#F4E6CF', transform: [{ rotate: '-12deg' }] },
   mapZonePark: { right: -36, top: 28, width: 190, height: 205, borderRadius: 46, backgroundColor: '#D9E7CB', transform: [{ rotate: '13deg' }] },
