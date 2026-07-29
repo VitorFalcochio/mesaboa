@@ -306,6 +306,18 @@ function imageSource(value, fallback = defaultImage) {
   return typeof value === 'string' ? { uri: value || fallback } : value || { uri: fallback };
 }
 
+function initialsForName(name, fallback = 'D') {
+  const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return fallback;
+  return words.slice(0, 2).map((word) => word.slice(0, 1).toUpperCase()).join('');
+}
+
+function postAuthorAvatar(post, currentUser) {
+  const isCurrentUserPost = currentUser?.id && String(post?.authorId) === String(currentUser.id);
+  if (isCurrentUserPost) return String(currentUser?.photo || '').trim();
+  return String(post?.avatar || post?.authorProfile?.avatar || '').trim();
+}
+
 const NativeMaps = Platform.OS !== 'web' ? require('react-native-maps') : null;
 const MapView = NativeMaps?.default;
 const Marker = NativeMaps?.Marker;
@@ -1876,7 +1888,8 @@ export default function App() {
   }
 
   function openFeedProfile(post) {
-    const profile = post.authorProfile || {
+    const avatar = postAuthorAvatar(post, currentUser);
+    const baseProfile = post.authorProfile || {
       id: post.authorId || post.handle || post.author,
       name: post.author,
       handle: post.handle,
@@ -1884,8 +1897,9 @@ export default function App() {
       instagram: '',
       followers: 0,
       following: 0,
-      avatar: post.avatar
+      avatar
     };
+    const profile = { ...baseProfile, avatar };
     const profileKey = profile.id || profile.handle || profile.name;
     const posts = feedPosts.filter((item) => {
       const itemProfile = item.authorProfile || {};
@@ -2003,7 +2017,7 @@ export default function App() {
       authorId: currentUser?.id || 'visitor-feed',
       author: currentUser?.name || 'Você',
       handle: currentUser?.email ? `@${normalize(currentUser.name || 'voce').replace(/\s+/g, '')}` : '@voce',
-      avatar: currentUser?.photo || restaurant.logo || restaurant.image,
+      avatar: currentUser?.photo || '',
       authorProfile: {
         id: currentUser?.id || 'visitor-feed',
         name: currentUser?.name || 'Você',
@@ -2012,7 +2026,7 @@ export default function App() {
         instagram: String(currentUser?.instagram || '').trim(),
         followers: currentUser?.followers || 0,
         following: currentUser?.following || 0,
-        avatar: currentUser?.photo || restaurant.logo || restaurant.image
+        avatar: currentUser?.photo || ''
       },
       image: photos[0],
       images: photos,
@@ -3206,11 +3220,19 @@ function postKey(restaurantId, postId) {
     const images = (post.images?.length ? post.images : [post.image]).filter(Boolean).slice(0, 4);
     const imageSize = Math.max(280, Math.min(width, 560));
     const activePhoto = feedPhotoIndexes[post.id] || 0;
+    const authorAvatar = postAuthorAvatar(post, currentUser);
+    const authorInitials = initialsForName(post.author, 'D');
     return (
       <View key={post.id} style={styles.feedPostCard}>
         <View style={styles.feedPostHeader}>
           <Pressable onPress={() => openFeedProfile(post)} style={({ pressed }) => [styles.feedAvatarButton, pressed && styles.activePress]}>
-            <Image source={imageSource(post.avatar)} style={styles.feedAvatar} />
+            {authorAvatar ? (
+              <Image source={imageSource(authorAvatar)} style={styles.feedAvatar} />
+            ) : (
+              <View style={styles.feedAvatarFallback}>
+                <Text style={styles.feedAvatarInitials}>{authorInitials}</Text>
+              </View>
+            )}
           </Pressable>
           <Pressable onPress={() => openFeedProfile(post)} style={({ pressed }) => [styles.feedAuthorCopy, pressed && styles.activePress]}>
             <Text style={styles.feedAuthor}>{post.author}</Text>
@@ -4816,6 +4838,8 @@ function postKey(restaurantId, postId) {
     const totalLikes = posts.reduce((sum, post) => sum + Number(post.likes || 0), 0);
     const followers = Math.max(0, Number(profile.followers || totalLikes + 120) + (isFollowing ? 1 : 0));
     const instagram = String(profile.instagram || '').trim();
+    const profileAvatar = String(profile.avatar || '').trim();
+    const profileInitials = initialsForName(profile.name, 'D');
     const instagramUrl = instagram
       ? instagram.startsWith('http') ? instagram : `https://instagram.com/${instagram.replace('@', '')}`
       : '';
@@ -4833,7 +4857,13 @@ function postKey(restaurantId, postId) {
           </Pressable>
         </View>
         <View style={styles.feedProfileHeader}>
-          <Image source={imageSource(profile.avatar)} style={styles.feedProfileAvatar} />
+          {profileAvatar ? (
+            <Image source={imageSource(profileAvatar)} style={styles.feedProfileAvatar} />
+          ) : (
+            <View style={styles.feedProfileAvatarFallback}>
+              <Text style={styles.feedProfileAvatarInitials}>{profileInitials}</Text>
+            </View>
+          )}
           <View style={styles.feedProfileStats}>
             {[
               ['Posts', posts.length],
@@ -5482,7 +5512,7 @@ function postKey(restaurantId, postId) {
       />
       <FeedPostDetailModal
         visible={Boolean(selectedFeedPost)}
-        post={selectedFeedPost}
+        post={selectedFeedPost ? { ...selectedFeedPost, avatar: postAuthorAvatar(selectedFeedPost, currentUser) } : null}
         reaction={selectedFeedPost ? feedState(selectedFeedPost) : {}}
         commentDraft={selectedFeedPost ? (feedCommentDrafts[selectedFeedPost.id] || '') : ''}
         onChangeComment={(value) => selectedFeedPost && setFeedCommentDrafts((current) => ({ ...current, [selectedFeedPost.id]: value }))}
@@ -6103,6 +6133,8 @@ function FeedPostDetailModal({
   const likes = Number(post.likes || 0) + (reaction?.liked ? 1 : 0);
   const restaurant = post.restaurant;
   const linkedRestaurant = restaurant?.id && !String(restaurant.id).startsWith('custom-restaurant-');
+  const authorAvatar = String(post.avatar || '').trim();
+  const authorInitials = initialsForName(post.author, 'D');
 
   return (
     <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
@@ -6119,7 +6151,13 @@ function FeedPostDetailModal({
 
         <ScrollView contentContainerStyle={styles.feedDetailContent} keyboardShouldPersistTaps="handled">
           <Pressable accessibilityRole="button" accessibilityLabel={`Abrir perfil de ${post.author}`} onPress={onOpenAuthor} style={styles.feedDetailAuthorRow}>
-            <Image accessibilityLabel={`Foto de ${post.author}`} source={imageSource(post.avatar)} style={styles.feedDetailAvatar} />
+            {authorAvatar ? (
+              <Image accessibilityLabel={`Foto de ${post.author}`} source={imageSource(authorAvatar)} style={styles.feedDetailAvatar} />
+            ) : (
+              <View style={styles.feedDetailAvatarFallback}>
+                <Text style={styles.feedDetailAvatarInitials}>{authorInitials}</Text>
+              </View>
+            )}
             <View style={styles.feedDetailAuthorCopy}>
               <Text style={styles.feedDetailAuthor}>{post.author || 'Usuario Dine'}</Text>
               <Text style={styles.feedDetailMeta}>{post.handle || '@dine'} • {formatPostDate(post.createdAt)}</Text>
@@ -6303,6 +6341,8 @@ function FeedProfileModal({ visible, profile, onClose, onOpenRestaurant, onRepor
   const gridGap = 2;
   const tileSize = Math.floor((Math.min(width, 520) - 36 - gridGap * 2) / 3);
   const totalLikes = posts.reduce((sum, post) => sum + Number(post.likes || 0), 0);
+  const profileAvatar = String(profile.avatar || '').trim();
+  const profileInitials = initialsForName(profile.name, 'D');
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.feedProfileBackdrop}>
@@ -6319,7 +6359,13 @@ function FeedProfileModal({ visible, profile, onClose, onOpenRestaurant, onRepor
             </View>
 
             <View style={styles.feedProfileHeader}>
-              <Image source={imageSource(profile.avatar)} style={styles.feedProfileAvatar} />
+              {profileAvatar ? (
+                <Image source={imageSource(profileAvatar)} style={styles.feedProfileAvatar} />
+              ) : (
+                <View style={styles.feedProfileAvatarFallback}>
+                  <Text style={styles.feedProfileAvatarInitials}>{profileInitials}</Text>
+                </View>
+              )}
               <View style={styles.feedProfileStats}>
                 {[
                   ['Posts', posts.length],
@@ -6878,6 +6924,8 @@ const styles = StyleSheet.create({
   feedPostHeader: { minHeight: 64, paddingHorizontal: 14, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
   feedAvatarButton: { width: 42, height: 42, borderRadius: 21 },
   feedAvatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
+  feedAvatarFallback: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.ink, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
+  feedAvatarInitials: { color: colors.card, fontFamily: bodyFont, fontSize: 13 },
   feedAuthorCopy: { flex: 1, minWidth: 0 },
   feedAuthor: { color: colors.ink, fontFamily: bodyFont, fontSize: 14 },
   feedMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, marginTop: 2 },
@@ -6949,6 +6997,8 @@ const styles = StyleSheet.create({
   feedProfileHandle: { flex: 1, textAlign: 'center', color: colors.ink, fontFamily: bodyFont, fontSize: 15 },
   feedProfileHeader: { flexDirection: 'row', alignItems: 'center', gap: 18 },
   feedProfileAvatar: { width: 92, height: 92, borderRadius: 46, backgroundColor: colors.surface, borderWidth: 2, borderColor: colors.card },
+  feedProfileAvatarFallback: { width: 92, height: 92, borderRadius: 46, backgroundColor: colors.ink, borderWidth: 2, borderColor: colors.card, alignItems: 'center', justifyContent: 'center' },
+  feedProfileAvatarInitials: { color: colors.card, fontFamily: titleFont, fontSize: 26 },
   feedProfileStats: { flex: 1, minWidth: 0, flexDirection: 'row', justifyContent: 'space-between', gap: 8 },
   feedProfileStat: { flex: 1, alignItems: 'center', gap: 3 },
   feedProfileStatValue: { color: colors.ink, fontFamily: bodyFont, fontSize: 17 },
@@ -7512,6 +7562,8 @@ Object.assign(styles, {
   feedDetailContent: { width: '100%', maxWidth: 720, alignSelf: 'center', paddingBottom: 48, backgroundColor: colors.bg },
   feedDetailAuthorRow: { minHeight: 68, paddingHorizontal: 14, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
   feedDetailAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
+  feedDetailAvatarFallback: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.ink, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
+  feedDetailAvatarInitials: { color: colors.card, fontFamily: bodyFont, fontSize: 13 },
   feedDetailAuthorCopy: { flex: 1, minWidth: 0 },
   feedDetailAuthor: { color: colors.ink, fontFamily: bodyFont, fontSize: 15 },
   feedDetailMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, marginTop: 2 },
