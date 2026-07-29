@@ -10,7 +10,8 @@
     "web": "expo start --web",
     "build": "expo export --platform web --output-dir dist",
     "build:sites": "npm run build && node scripts/prepare-sites-build.js",
-    "smoke": "node scripts/smoke-check.js"
+    "smoke": "node scripts/smoke-check.js",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@expo-google-fonts/baloo-2": "^0.4.2",
@@ -34,6 +35,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@playwright/test": "^1.62.0",
     "babel-preset-expo": "~54.0.0"
   }
 }
