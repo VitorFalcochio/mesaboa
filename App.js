@@ -709,12 +709,34 @@ function buildRestaurantGeocodeQuery(item) {
   return parts.join(', ');
 }
 
-function googleMapsEmbedUrl(region) {
-  const latitude = Number(region?.latitude || rioPretoRegion.latitude);
-  const longitude = Number(region?.longitude || rioPretoRegion.longitude);
+const webMapTileSize = 256;
+
+function webMapZoom(region) {
   const delta = Math.max(Number(region?.latitudeDelta || rioPretoRegion.latitudeDelta), Number(region?.longitudeDelta || rioPretoRegion.longitudeDelta));
-  const zoom = delta <= 0.025 ? 15 : delta <= 0.04 ? 14 : 13;
-  return `https://www.google.com/maps?q=${latitude},${longitude}&z=${zoom}&output=embed`;
+  if (delta <= 0.025) return 15;
+  if (delta <= 0.04) return 14;
+  return 13;
+}
+
+function longitudeToTileX(longitude, zoom) {
+  return ((Number(longitude) + 180) / 360) * (2 ** zoom);
+}
+
+function latitudeToTileY(latitude, zoom) {
+  const latRad = Number(latitude) * Math.PI / 180;
+  return (1 - Math.log(Math.tan(latRad) + (1 / Math.cos(latRad))) / Math.PI) / 2 * (2 ** zoom);
+}
+
+function webMapPoint(coordinate, region, width, height = 420) {
+  const zoom = webMapZoom(region);
+  const centerX = longitudeToTileX(region.longitude, zoom) * webMapTileSize;
+  const centerY = latitudeToTileY(region.latitude, zoom) * webMapTileSize;
+  const pointX = longitudeToTileX(coordinate.longitude, zoom) * webMapTileSize;
+  const pointY = latitudeToTileY(coordinate.latitude, zoom) * webMapTileSize;
+  return {
+    left: width / 2 + pointX - centerX,
+    top: height / 2 + pointY - centerY
+  };
 }
 
 async function geocodeRestaurantCoordinate(item) {
@@ -946,6 +968,27 @@ function matchesQuickFilter(item, filter) {
 }
 
 function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocation, locationGranted }) {
+  const { width } = useWindowDimensions();
+  const webMapWidth = Math.max(320, width);
+  const webMapHeight = 420;
+  const webMapRegion = region || rioPretoRegion;
+  const webMapZoomLevel = webMapZoom(webMapRegion);
+  const webMapCenterTileX = longitudeToTileX(webMapRegion.longitude, webMapZoomLevel);
+  const webMapCenterTileY = latitudeToTileY(webMapRegion.latitude, webMapZoomLevel);
+  const webMapCenterPixelX = webMapCenterTileX * webMapTileSize;
+  const webMapCenterPixelY = webMapCenterTileY * webMapTileSize;
+  const webTiles = [];
+  for (let x = Math.floor(webMapCenterTileX) - 2; x <= Math.floor(webMapCenterTileX) + 2; x += 1) {
+    for (let y = Math.floor(webMapCenterTileY) - 2; y <= Math.floor(webMapCenterTileY) + 2; y += 1) {
+      webTiles.push({
+        key: `${webMapZoomLevel}-${x}-${y}`,
+        url: `https://tile.openstreetmap.org/${webMapZoomLevel}/${x}/${y}.png`,
+        left: x * webMapTileSize - webMapCenterPixelX + webMapWidth / 2,
+        top: y * webMapTileSize - webMapCenterPixelY + webMapHeight / 2
+      });
+    }
+  }
+
   if (MapView && Marker) {
     return (
       <View style={styles.realMapCard}>
@@ -983,27 +1026,37 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
   if (Platform.OS === 'web') {
     return (
       <View style={styles.mapCard}>
-        {React.createElement('iframe', {
-          title: 'Mapa de restaurantes em Sao Jose do Rio Preto',
-          src: googleMapsEmbedUrl(region),
-          loading: 'lazy',
-          allowFullScreen: true,
-          referrerPolicy: 'no-referrer-when-downgrade',
+        {webTiles.map((tile) => React.createElement('img', {
+          key: tile.key,
+          src: tile.url,
+          alt: '',
+          draggable: false,
           style: {
             position: 'absolute',
-            inset: 0,
-            width: '100%',
-            height: '100%',
-            border: 0
+            left: tile.left,
+            top: tile.top,
+            width: webMapTileSize,
+            height: webMapTileSize,
+            userSelect: 'none'
           }
-        })}
+        }))}
         <View pointerEvents="none" style={styles.webMapScrim} />
         <View style={styles.mapCompass}>
           <Ionicons name="navigate" size={16} color={colors.redDark} />
           <Text style={styles.mapCompassText}>Dine</Text>
         </View>
         {restaurants.slice(0, 5).map((item, index) => (
-          <Pressable key={item.id} onPress={() => onSelect(item)} style={[styles.mapPin, styles[`pin${index}`]]}>
+          <Pressable
+            key={item.id}
+            onPress={() => onSelect(item)}
+            style={[
+              styles.mapPin,
+              {
+                left: Math.max(12, Math.min(webMapWidth - 142, webMapPoint(item.coordinate || coordinateForRestaurant(item, index), webMapRegion, webMapWidth, webMapHeight).left - 18)),
+                top: Math.max(54, Math.min(webMapHeight - 86, webMapPoint(item.coordinate || coordinateForRestaurant(item, index), webMapRegion, webMapWidth, webMapHeight).top - 42))
+              }
+            ]}
+          >
             <View style={[styles.mapPinBubble, index === 2 && styles.mapPinBubbleAlt]}>
               <MaterialCommunityIcons name="silverware-fork-knife" size={16} color={colors.card} />
             </View>
@@ -1014,6 +1067,18 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
             </View>
           </Pressable>
         ))}
+        {userLocation ? (
+          <View
+            style={[
+              styles.userDot,
+              {
+                left: Math.max(12, Math.min(webMapWidth - 28, webMapPoint(userLocation, webMapRegion, webMapWidth, webMapHeight).left - 12)),
+                top: Math.max(54, Math.min(webMapHeight - 28, webMapPoint(userLocation, webMapRegion, webMapWidth, webMapHeight).top - 12))
+              }
+            ]}
+          />
+        ) : null}
+        <Text style={styles.webMapAttribution}>Map data: OpenStreetMap</Text>
       </View>
     );
   }
@@ -1375,7 +1440,7 @@ export default function App() {
     const needle = normalize(query);
     return publicRestaurants
       .map((item, index) => {
-        const coordinate = coordinateForRestaurant(item, index);
+        const coordinate = item.coordinate || coordinateForRestaurant(item, index);
         const distanceFromUser = distanceKm(userLocation, coordinate);
         const distanceFromArea = distanceKm(searchCenter, coordinate);
         return {
@@ -1798,8 +1863,35 @@ export default function App() {
 
   async function requestUserLocation() {
     if (Platform.OS === 'web') {
-      setLocationStatus('unavailable');
-      setLocationMessage('No navegador, use cidade ou bairro para buscar por área.');
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        setLocationStatus('unavailable');
+        setLocationMessage('Seu navegador nao liberou localizacao. Use cidade ou bairro como fallback.');
+        return;
+      }
+      setLocationStatus('requesting');
+      setLocationMessage('Pedindo permissao de localizacao...');
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const nextLocation = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude
+          };
+          setUserLocation(nextLocation);
+          setLocationStatus('granted');
+          setLocationMessage('Ordenando restaurantes pela sua distancia real.');
+          setSelectedArea('Perto de mim');
+          setMapRegion({
+            ...nextLocation,
+            latitudeDelta: 0.035,
+            longitudeDelta: 0.03
+          });
+        },
+        () => {
+          setLocationStatus('denied');
+          setLocationMessage('Localizacao nao autorizada. Voce ainda pode buscar por cidade, bairro e raio.');
+        },
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+      );
       return;
     }
     try {
@@ -1922,8 +2014,17 @@ export default function App() {
       return;
     }
     if (Platform.OS === 'web') {
-      await updateNotificationSettings({ pushEnabled: false, pushStatus: 'web-unavailable' });
-      Alert.alert('Notificações', 'Push real precisa rodar no app iOS ou Android. No navegador, suas preferências ficam salvas.');
+      if (typeof window === 'undefined' || !('Notification' in window)) {
+        await updateNotificationSettings({ pushEnabled: false, pushStatus: 'web-unavailable' });
+        Alert.alert('Notificacoes', 'Este navegador nao oferece permissoes de notificacao. Suas preferencias ficam salvas.');
+        return;
+      }
+      const permission = window.Notification.permission === 'default'
+        ? await window.Notification.requestPermission()
+        : window.Notification.permission;
+      const granted = permission === 'granted';
+      await updateNotificationSettings({ pushEnabled: granted, pushStatus: granted ? 'web-granted' : 'denied' });
+      Alert.alert('Notificacoes', granted ? 'Notificacoes do navegador ativadas.' : 'Permissao negada. Voce pode ativar depois nas configuracoes do navegador.');
       return;
     }
     try {
@@ -6443,6 +6544,7 @@ Object.assign(styles, {
   realMap: { flex: 1 },
   mapCard: { height: 420, marginHorizontal: -22, backgroundColor: '#EAF0E1', overflow: 'hidden' },
   webMapScrim: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, backgroundColor: 'rgba(255, 246, 234, 0.08)' },
+  webMapAttribution: { position: 'absolute', right: 8, bottom: 28, zIndex: 4, paddingHorizontal: 6, paddingVertical: 3, backgroundColor: 'rgba(255,255,255,0.86)', color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10 },
   mapZone: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(40, 40, 43, 0.07)' },
   mapZoneNorth: { left: -26, top: -30, width: 210, height: 168, borderRadius: 36, backgroundColor: '#F4E6CF', transform: [{ rotate: '-12deg' }] },
   mapZonePark: { right: -36, top: 28, width: 190, height: 205, borderRadius: 46, backgroundColor: '#D9E7CB', transform: [{ rotate: '13deg' }] },
