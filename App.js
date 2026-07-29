@@ -37,6 +37,7 @@ import {
   fetchOwnerRestaurantsFromDb,
   fetchPendingRestaurantsFromDb,
   fetchReviewsFromDb,
+  fetchFeedDataFromDb,
   fetchRestaurantsFromDb,
   supabaseReady,
   addFeedCommentToDb,
@@ -44,6 +45,7 @@ import {
   claimRestaurantInDb,
   createInviteLinkInDb,
   createFeedPostInDb,
+  deleteFeedPostInDb,
   createRestaurantInDb,
   deleteUserAccountInDb,
   reportContentInDb,
@@ -312,10 +314,18 @@ const storageKeys = {
   users: 'dineUsersRN',
   currentUser: 'dineCurrentUserRN',
   restaurantCoordinates: 'dineRestaurantCoordinatesRN',
+  feedPosts: 'dineFeedPostsRN',
+  feedReactions: 'dineFeedReactionsRN',
   onboardingSeen: 'dineOnboardingSeenRN'
 };
 const homeRestaurantSectionLimit = 15;
-const privacyPolicyUrl = process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || 'https://dine.app/privacidade';
+const publicAppUrl = String(
+  process.env.EXPO_PUBLIC_APP_URL
+  || (Platform.OS === 'web' && typeof window !== 'undefined' ? window.location.origin : '')
+).replace(/\/+$/, '');
+const privacyPolicyUrl = String(process.env.EXPO_PUBLIC_PRIVACY_POLICY_URL || '').trim();
+const supportEmail = String(process.env.EXPO_PUBLIC_SUPPORT_EMAIL || '').trim();
+const supportWhatsApp = String(process.env.EXPO_PUBLIC_SUPPORT_WHATSAPP || '').replace(/\D/g, '');
 const demoDataEnabled = process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA === 'true';
 const demoAccountEmail = 'vitorfalcochio@gmail.com';
 const builtInAdminEmails = demoDataEnabled ? [demoAccountEmail] : [];
@@ -517,12 +527,36 @@ const gamificationEvents = {
   invite: { awarded: 'invites', metric: 'invites' }
 };
 
-function AppButton({ children, kind = 'primary', onPress, style }) {
+function AppButton({ children, kind = 'primary', onPress, style, disabled = false }) {
   return (
-    <Pressable accessibilityRole="button" hitSlop={6} onPress={onPress} style={({ pressed }) => [styles.button, styles[`${kind}Button`], pressed && styles.pressed, style]}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      hitSlop={6}
+      onPress={onPress}
+      style={({ pressed }) => [styles.button, styles[`${kind}Button`], disabled && styles.buttonDisabled, pressed && styles.pressed, style]}
+    >
       <Text style={[styles.buttonText, styles[`${kind}ButtonText`]]}>{children}</Text>
     </Pressable>
   );
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+}
+
+function formatPostDate(value) {
+  if (!value) return 'Publicacao recente';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Publicacao recente';
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function commentsForPost(post, reaction = {}) {
+  return [...(post?.comments || []), ...(reaction?.comments || [])].reduce((items, comment) => (
+    items.some((item) => String(item.id) === String(comment.id)) ? items : [...items, comment]
+  ), []);
 }
 
 function isAdminEmail(email) {
@@ -1110,28 +1144,29 @@ function PartnerMap({ restaurants, onSelect, region, onRegionChange, userLocatio
           <Ionicons name="navigate" size={16} color={colors.redDark} />
           <Text style={styles.mapCompassText}>Dine</Text>
         </View>
-        {restaurants.slice(0, 5).map((item, index) => (
-          <Pressable
-            key={item.id}
-            onPress={() => onSelect(item)}
-            style={[
-              styles.webMapMarker,
-              {
-                left: Math.max(18, Math.min(webMapWidth - 18, webPointForItem(item, index).left)),
-                top: Math.max(62, Math.min(webMapHeight - 22, webPointForItem(item, index).top))
-              }
-            ]}
-          >
-            <View style={styles.webMapMarkerStem} />
-            <View style={styles.webMapMarkerCard}>
-              <Text numberOfLines={1} style={styles.mapPinName}>{item.name}</Text>
-              <Text numberOfLines={1} style={styles.mapPinMeta}>{Number.isFinite(item.distanceKm) ? formatDistance(item.distanceKm) : item.type}</Text>
-            </View>
-            <View style={[styles.webMapMarkerDot, index === 2 && styles.webMapMarkerDotAlt]}>
-              <MaterialCommunityIcons name="silverware-fork-knife" size={15} color={colors.card} />
-            </View>
-          </Pressable>
-        ))}
+        {restaurants.slice(0, 5).map((item, index) => {
+          const point = webPointForItem(item, index);
+          const visible = point.left > -90 && point.left < webMapWidth + 90 && point.top > -40 && point.top < webMapHeight + 90;
+          if (!visible) return null;
+          return (
+            <Pressable
+              key={item.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Abrir restaurante ${item.name}`}
+              onPress={() => onSelect(item)}
+              style={[styles.webMapMarker, { left: point.left, top: point.top }]}
+            >
+              <View style={styles.webMapMarkerStem} />
+              <View style={styles.webMapMarkerCard}>
+                <Text numberOfLines={1} style={styles.mapPinName}>{item.name}</Text>
+                <Text numberOfLines={1} style={styles.mapPinMeta}>{Number.isFinite(item.distanceKm) ? formatDistance(item.distanceKm) : item.type}</Text>
+              </View>
+              <View style={[styles.webMapMarkerDot, index === 2 && styles.webMapMarkerDotAlt]}>
+                <MaterialCommunityIcons name="silverware-fork-knife" size={15} color={colors.card} />
+              </View>
+            </Pressable>
+          );
+        })}
         {userLocation ? (
           <View
             style={[
@@ -1246,6 +1281,7 @@ export default function App() {
   const [feedPhotoIndexes, setFeedPhotoIndexes] = useState({});
   const [customFeedPosts, setCustomFeedPosts] = useState([]);
   const [selectedFeedProfile, setSelectedFeedProfile] = useState(null);
+  const [selectedFeedPost, setSelectedFeedPost] = useState(null);
   const [feedComposerOpen, setFeedComposerOpen] = useState(false);
   const [feedDraft, setFeedDraft] = useState({ caption: '', restaurantId: '', restaurantName: '', photos: [] });
   const [profileInstagramDraft, setProfileInstagramDraft] = useState('');
@@ -1254,6 +1290,7 @@ export default function App() {
   const [showStartupSplash, setShowStartupSplash] = useState(true);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingIndex, setOnboardingIndex] = useState(0);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
 
   useEffect(() => {
     screenFade.setValue(0);
@@ -1330,12 +1367,14 @@ export default function App() {
   useEffect(() => {
     async function load() {
       try {
-        const [storedRestaurants, storedFavorites, storedUsers, storedCurrentUser, storedOnboardingSeen] = await Promise.all([
+        const [storedRestaurants, storedFavorites, storedUsers, storedCurrentUser, storedOnboardingSeen, storedFeedPosts, storedFeedReactions] = await Promise.all([
           AsyncStorage.getItem(storageKeys.restaurants),
           AsyncStorage.getItem(storageKeys.favorites),
           AsyncStorage.getItem(storageKeys.users),
           AsyncStorage.getItem(storageKeys.currentUser),
-          AsyncStorage.getItem(storageKeys.onboardingSeen)
+          AsyncStorage.getItem(storageKeys.onboardingSeen),
+          AsyncStorage.getItem(storageKeys.feedPosts),
+          AsyncStorage.getItem(storageKeys.feedReactions)
         ]);
         const storedRestaurantCoordinates = await AsyncStorage.getItem(storageKeys.restaurantCoordinates);
         const localUser = storedCurrentUser ? normalizeDemoAccount(JSON.parse(storedCurrentUser)) : null;
@@ -1345,6 +1384,10 @@ export default function App() {
           setRestaurants(shouldRefreshLegacySeedRestaurants(parsedRestaurants) ? seedRestaurants : mergeSeedRestaurantMenus(parsedRestaurants));
         }
         if (storedFavorites) setFavorites(JSON.parse(storedFavorites));
+        const localFeedPosts = storedFeedPosts ? JSON.parse(storedFeedPosts) : [];
+        const localFeedReactions = storedFeedReactions ? JSON.parse(storedFeedReactions) : {};
+        if (localFeedPosts.length) setCustomFeedPosts(localFeedPosts);
+        if (Object.keys(localFeedReactions).length) setFeedReactions(localFeedReactions);
         if (storedRestaurantCoordinates) {
           setRestaurantCoordinates(JSON.parse(storedRestaurantCoordinates));
         }
@@ -1377,6 +1420,14 @@ export default function App() {
             const remoteFavorites = await fetchFavoritesFromDb(localUser.id);
             if (remoteFavorites) setFavorites(remoteFavorites);
           }
+          const remoteFeed = await fetchFeedDataFromDb(localUser?.id);
+          if (remoteFeed) {
+            setCustomFeedPosts([
+              ...remoteFeed.posts,
+              ...localFeedPosts.filter((localPost) => !remoteFeed.posts.some((remotePost) => remotePost.id === localPost.id))
+            ]);
+            setFeedReactions({ ...localFeedReactions, ...remoteFeed.reactions });
+          }
         }
       } catch (error) {
         Alert.alert('Supabase', 'Não foi possível sincronizar agora. O app vai continuar usando os dados locais.');
@@ -1407,6 +1458,16 @@ export default function App() {
     if (!hydrated) return;
     AsyncStorage.setItem(storageKeys.restaurantCoordinates, JSON.stringify(restaurantCoordinates));
   }, [hydrated, restaurantCoordinates]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    AsyncStorage.setItem(storageKeys.feedPosts, JSON.stringify(customFeedPosts));
+  }, [customFeedPosts, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    AsyncStorage.setItem(storageKeys.feedReactions, JSON.stringify(feedReactions));
+  }, [feedReactions, hydrated]);
 
   useEffect(() => {
     if (!hydrated || !currentUser) return;
@@ -1560,6 +1621,7 @@ export default function App() {
       images: [image],
       title: dish?.name || restaurant.name,
       caption: captions[index % captions.length],
+      createdAt: restaurant.updatedAt || restaurant.createdAt || null,
       location: `${restaurant.district} • ${restaurant.type}`,
       likes: 24 + index * 7 + Math.round(scoreValue(restaurant) * 3),
       comments: [
@@ -1664,6 +1726,7 @@ export default function App() {
     }
     if (action?.type === 'favorite') toggleFavorite(action.name, user);
     if (action?.type === 'restaurant-register') navigateTo('restaurantRegister');
+    if (action?.type === 'feed-composer') openFeedComposer(user);
   }
 
   function toggleFavorite(name, user = currentUser) {
@@ -1697,6 +1760,33 @@ export default function App() {
     return feedReactions[post.id] || {};
   }
 
+  function openFeedPost(post) {
+    if (!post?.id) return;
+    setSelectedFeedPost(post);
+  }
+
+  function deleteFeedPost(post) {
+    if (!currentUser || String(post?.authorId) !== String(currentUser.id)) return;
+    Alert.alert(
+      'Excluir publicacao',
+      'Essa publicacao sera removida do seu feed.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Excluir',
+          style: 'destructive',
+          onPress: () => {
+            setCustomFeedPosts((items) => items.filter((item) => item.id !== post.id));
+            setSelectedFeedPost(null);
+            deleteFeedPostInDb(post.id, currentUser).catch(() => {
+              Alert.alert('Publicacao removida', 'Ela saiu deste aparelho, mas a remocao no servidor precisa ser tentada novamente.');
+            });
+          }
+        }
+      ]
+    );
+  }
+
   function toggleFeedFlag(postId, field) {
     if (['liked', 'saved', 'reposted'].includes(field) && !currentUser) {
       requireLogin({ type: 'tab', target: 'Perfil' });
@@ -1727,7 +1817,9 @@ export default function App() {
     const comment = {
       id: `${post.id}-${Date.now()}`,
       author: currentUser?.name || 'Visitante',
-      text
+      userId: currentUser?.id,
+      text,
+      createdAt: new Date().toISOString()
     };
     setFeedReactions((current) => ({
       ...current,
@@ -1741,7 +1833,8 @@ export default function App() {
   }
 
   function shareFeedPost(post) {
-    Share.share({ message: `${post.caption}\n${post.restaurant.name} no Dine.` }).catch(() => {});
+    const restaurantName = post.restaurant?.name || post.restaurantName || '';
+    Share.share({ message: `${post.caption || 'Veja esta publicacao no Dine.'}${restaurantName ? `\nPublicado em ${restaurantName}.` : ''}` }).catch(() => {});
   }
 
   function openFeedProfile(post) {
@@ -1782,7 +1875,11 @@ export default function App() {
     await updateCurrentUserProfile({ followingProfiles: nextFollowing });
   }
 
-  function openFeedComposer() {
+  function openFeedComposer(user = currentUser) {
+    if (!user) {
+      requireLogin({ type: 'feed-composer' });
+      return;
+    }
     setFeedDraft({
       caption: '',
       restaurantId: '',
@@ -1883,6 +1980,7 @@ export default function App() {
       images: photos,
       title: restaurant.name,
       caption,
+      createdAt: new Date().toISOString(),
       location: `${restaurant.district} • ${restaurant.type}`,
       likes: 0,
       comments: [],
@@ -2221,7 +2319,7 @@ export default function App() {
       return;
     }
     const localCode = normalize(`${currentUser.name || 'dine'}-${currentUser.id}`).replace(/[^a-z0-9]/g, '').slice(0, 16) || String(currentUser.id);
-    let invite = currentUser.invite || { code: localCode, link: `https://dine.app/invite/${localCode}`, uses: 0 };
+    let invite = currentUser.invite || { code: localCode, link: publicAppUrl ? `${publicAppUrl}/invite/${localCode}` : '', uses: 0 };
     try {
       const remoteInvite = await createInviteLinkInDb(currentUser);
       if (remoteInvite) invite = { ...invite, ...remoteInvite };
@@ -2245,20 +2343,32 @@ export default function App() {
       nextGamification.achievements = [...new Set([...(nextGamification.achievements || []), ...achievements])];
     }
     await saveCurrentUser({ ...currentUser, invite, gamification: nextGamification });
+    if (!invite.link) {
+      Alert.alert('Convites', 'Configure EXPO_PUBLIC_APP_URL para compartilhar links de convite no aplicativo nativo.');
+      return;
+    }
     Share.share({ message: `Vem descobrir restaurantes comigo no Dine: ${invite.link}` }).catch(() => {});
   }
 
   function openSupportEmail() {
+    if (!supportEmail) {
+      Alert.alert('Suporte', 'O e-mail de suporte ainda nao foi configurado.');
+      return;
+    }
     const subject = encodeURIComponent('Suporte Dine');
     const body = encodeURIComponent(`Olá, time Dine.\n\nConta: ${currentUser?.email || 'sem login'}\n\nPreciso de ajuda com:`);
-    Linking.openURL(`mailto:suporte@dine.app?subject=${subject}&body=${body}`).catch(() => {
-      Alert.alert('Suporte', 'Envie sua mensagem para suporte@dine.app.');
+    Linking.openURL(`mailto:${supportEmail}?subject=${subject}&body=${body}`).catch(() => {
+      Alert.alert('Suporte', `Envie sua mensagem para ${supportEmail}.`);
     });
   }
 
   function openSupportWhatsApp() {
+    if (!supportWhatsApp) {
+      Alert.alert('Suporte', 'O WhatsApp de suporte ainda nao foi configurado.');
+      return;
+    }
     const text = encodeURIComponent(`Olá, preciso de ajuda com minha conta no Dine. Email: ${currentUser?.email || 'sem login'}`);
-    Linking.openURL(`https://wa.me/5517999999999?text=${text}`).catch(() => {
+    Linking.openURL(`https://wa.me/${supportWhatsApp}?text=${text}`).catch(() => {
       Alert.alert('Suporte', 'Não conseguimos abrir o WhatsApp agora.');
     });
   }
@@ -2426,13 +2536,20 @@ export default function App() {
     setOnboardingIndex((index) => index + 1);
   }
 
-  function submitAuth() {
+  async function submitAuth() {
+    if (authSubmitting) return;
     const email = normalize(form.email).trim();
     const password = String(form.password || '');
     if (!email || !password) {
       Alert.alert('Campos obrigatórios', 'Informe e-mail e senha para continuar.');
       return;
     }
+    if (!isValidEmail(email)) {
+      Alert.alert('E-mail inválido', 'Digite um endereço de e-mail válido.');
+      return;
+    }
+    setAuthSubmitting(true);
+    try {
     if (authMode === 'signup') {
       if (!form.name || password.length < 6) {
         Alert.alert('Cadastro', 'Informe seu nome e uma senha com pelo menos 6 caracteres.');
@@ -2445,7 +2562,7 @@ export default function App() {
       const now = new Date().toISOString();
       const user = { id: String(Date.now()), name: form.name.trim(), email, instagram: '', photo: '', bio: '', location: '', preferences: [], gamification: defaultGamification(), createdAt: now, security: { lastLoginAt: now, platform: Platform.OS } };
       setUsers((items) => [...items, { ...user, password }]);
-      saveCurrentUser(user);
+      await saveCurrentUser(user);
       setAuthMode(null);
       setForm({});
       completePendingAction(user);
@@ -2469,10 +2586,13 @@ export default function App() {
       security: { ...(found.security || {}), lastLoginAt: new Date().toISOString(), platform: Platform.OS },
       gamification: mergeGamification(found.gamification)
     });
-    saveCurrentUser(user);
+    await saveCurrentUser(user);
     setAuthMode(null);
     setForm({});
     completePendingAction(user);
+    } finally {
+      setAuthSubmitting(false);
+    }
   }
 
   function submitRestaurant() {
@@ -3041,9 +3161,9 @@ function postKey(restaurantId, postId) {
 
   function renderFeedPost(post) {
     const state = feedState(post);
-    const comments = [...post.comments, ...(state.comments || [])];
-    const likes = post.likes + (state.liked ? 1 : 0);
-    const reposts = post.reposts + (state.reposted ? 1 : 0);
+    const comments = commentsForPost(post, state);
+    const likes = Number(post.likes || 0) + (state.liked ? 1 : 0);
+    const reposts = Number(post.reposts || 0) + (state.reposted ? 1 : 0);
     const images = (post.images?.length ? post.images : [post.image]).filter(Boolean).slice(0, 4);
     const imageSize = Math.max(280, width);
     const activePhoto = feedPhotoIndexes[post.id] || 0;
@@ -3080,8 +3200,14 @@ function postKey(restaurantId, postId) {
             }}
           >
             {images.map((photo, index) => (
-              <Pressable key={`${post.id}-photo-${index}`} onPress={() => openFeedProfile(post)} style={({ pressed }) => [styles.feedPhotoSlide, { width: imageSize }, pressed && styles.pressed]}>
-                <Image source={imageSource(photo)} style={styles.feedImage} />
+              <Pressable
+                key={`${post.id}-photo-${index}`}
+                accessibilityRole="button"
+                accessibilityLabel={`Abrir publicacao de ${post.author}`}
+                onPress={() => openFeedPost(post)}
+                style={({ pressed }) => [styles.feedPhotoSlide, { width: imageSize }, pressed && styles.pressed]}
+              >
+                <Image accessibilityLabel={post.caption || post.title} source={imageSource(photo)} style={styles.feedImage} />
               </Pressable>
             ))}
           </ScrollView>
@@ -3096,8 +3222,10 @@ function postKey(restaurantId, postId) {
         </View>
 
         <View style={styles.feedPostBody}>
-          <Text style={styles.feedPostTitle}>{post.title}</Text>
-          <Text style={styles.feedCaption}>{post.caption}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Ver detalhes da publicacao de ${post.author}`} onPress={() => openFeedPost(post)}>
+            <Text style={styles.feedPostTitle}>{post.title}</Text>
+            <Text style={styles.feedCaption}>{post.caption}</Text>
+          </Pressable>
           <View style={styles.feedActionsRow}>
             <Pressable onPress={() => toggleFeedFlag(post.id, 'liked')} style={styles.feedActionButton}>
               <Ionicons name={state.liked ? 'heart' : 'heart-outline'} size={22} color={state.liked ? colors.redDark : colors.ink} />
@@ -4361,7 +4489,14 @@ function postKey(restaurantId, postId) {
       <View>
         {renderScreenHeader('Termos e privacidade', 'Resumo das regras principais da plataforma.')}
         <View style={styles.settingsList}>
-          <SettingsActionRow icon="open-outline" title="Politica de privacidade completa" subtitle={privacyPolicyUrl} onPress={() => Linking.openURL(privacyPolicyUrl).catch(() => Alert.alert('Privacidade', 'Nao conseguimos abrir a politica agora.'))} />
+          <SettingsActionRow
+            icon="open-outline"
+            title="Politica de privacidade completa"
+            subtitle={privacyPolicyUrl || 'URL ainda nao configurada'}
+            onPress={() => privacyPolicyUrl
+              ? Linking.openURL(privacyPolicyUrl).catch(() => Alert.alert('Privacidade', 'Nao conseguimos abrir a politica agora.'))
+              : Alert.alert('Privacidade', 'Configure EXPO_PUBLIC_PRIVACY_POLICY_URL antes da publicacao.')}
+          />
           <SettingsActionRow icon="trash-outline" title="Excluir minha conta" subtitle="Disponivel em Perfil > Configuracoes > Seguranca" onPress={() => navigateTo('security')} />
         </View>
         {sections.map(([title, text]) => (
@@ -4385,7 +4520,7 @@ function postKey(restaurantId, postId) {
           <Text style={styles.panelText}>Restaurantes carregados: {restaurants.length}</Text>
         </View>
         <View style={styles.settingsList}>
-          <SettingsActionRow icon="share-social-outline" title="Compartilhar Dine" subtitle="Enviar convite para outra pessoa" onPress={() => Share.share({ message: 'Conheca o Dine e descubra restaurantes perto de voce.' })} />
+          <SettingsActionRow icon="share-social-outline" title="Compartilhar Dine" subtitle="Enviar convite para outra pessoa" onPress={() => Share.share({ message: `Conheca o Dine e descubra restaurantes perto de voce.${publicAppUrl ? ` ${publicAppUrl}` : ''}` })} />
         </View>
       </View>
     );
@@ -4605,7 +4740,9 @@ function postKey(restaurantId, postId) {
             return (
               <Pressable
                 key={post.id}
-                onPress={() => post.restaurant ? setSelectedRestaurant(post.restaurant) : null}
+                accessibilityRole="button"
+                accessibilityLabel={`Abrir publicacao de ${post.author || profile.name}`}
+                onPress={() => openFeedPost(post)}
                 style={[styles.feedProfileTile, { width: tileSize, height: tileSize }]}
               >
                 <Image source={imageSource(photo)} style={styles.feedProfileTileImage} />
@@ -5204,6 +5341,32 @@ function postKey(restaurantId, postId) {
         onLike={() => selectedPanelPost ? togglePanelPostLike(selectedPanelPost.restaurant, selectedPanelPost.post) : null}
         onReport={() => selectedPanelPost ? reportContent({ type: 'restaurantPost', id: selectedPanelPost.post.id, label: `post de ${selectedPanelPost.restaurant.name}`, source: 'restaurant-post' }) : null}
       />
+      <FeedPostDetailModal
+        visible={Boolean(selectedFeedPost)}
+        post={selectedFeedPost}
+        reaction={selectedFeedPost ? feedState(selectedFeedPost) : {}}
+        commentDraft={selectedFeedPost ? (feedCommentDrafts[selectedFeedPost.id] || '') : ''}
+        onChangeComment={(value) => selectedFeedPost && setFeedCommentDrafts((current) => ({ ...current, [selectedFeedPost.id]: value }))}
+        onAddComment={() => selectedFeedPost && addFeedComment(selectedFeedPost)}
+        onClose={() => setSelectedFeedPost(null)}
+        onOpenAuthor={() => {
+          if (!selectedFeedPost) return;
+          const post = selectedFeedPost;
+          setSelectedFeedPost(null);
+          openFeedProfile(post);
+        }}
+        onOpenRestaurant={() => {
+          const restaurant = selectedFeedPost?.restaurant;
+          setSelectedFeedPost(null);
+          if (restaurant?.id && !String(restaurant.id).startsWith('custom-restaurant-')) setSelectedRestaurant(restaurant);
+        }}
+        onLike={() => selectedFeedPost && toggleFeedFlag(selectedFeedPost.id, 'liked')}
+        onSave={() => selectedFeedPost && toggleFeedFlag(selectedFeedPost.id, 'saved')}
+        onShare={() => selectedFeedPost && shareFeedPost(selectedFeedPost)}
+        onReport={() => selectedFeedPost && reportContent({ type: 'feedPost', id: selectedFeedPost.id, label: `publicacao de ${selectedFeedPost.author}`, source: 'feed-detail' })}
+        onDelete={() => selectedFeedPost && deleteFeedPost(selectedFeedPost)}
+        canDelete={Boolean(currentUser && selectedFeedPost && String(selectedFeedPost.authorId) === String(currentUser.id))}
+      />
       <FeedProfileModal
         visible={false}
         profile={selectedFeedProfile}
@@ -5231,6 +5394,7 @@ function postKey(restaurantId, postId) {
         setForm={setForm}
         setMode={setAuthMode}
         onSubmitAuth={submitAuth}
+        submitting={authSubmitting}
         required={!currentUser}
       />
       <OnboardingModal
@@ -5734,6 +5898,163 @@ function RestaurantModal({
   );
 }
 
+function FeedPostDetailModal({
+  visible,
+  post,
+  reaction,
+  commentDraft,
+  onChangeComment,
+  onAddComment,
+  onClose,
+  onOpenAuthor,
+  onOpenRestaurant,
+  onLike,
+  onSave,
+  onShare,
+  onReport,
+  onDelete,
+  canDelete
+}) {
+  const { width } = useWindowDimensions();
+  if (!visible || !post) return null;
+
+  const images = (post.images?.length ? post.images : [post.image]).filter(Boolean).slice(0, 4);
+  const comments = commentsForPost(post, reaction);
+  const imageWidth = Math.min(width, 720);
+  const likes = Number(post.likes || 0) + (reaction?.liked ? 1 : 0);
+  const restaurant = post.restaurant;
+  const linkedRestaurant = restaurant?.id && !String(restaurant.id).startsWith('custom-restaurant-');
+
+  return (
+    <Modal visible animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
+      <SafeAreaView style={styles.feedDetailSafe}>
+        <View style={styles.feedDetailTopBar}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Fechar publicacao" onPress={onClose} style={styles.feedDetailIconButton}>
+            <Ionicons name="chevron-back" size={24} color={colors.ink} />
+          </Pressable>
+          <Text style={styles.feedDetailTopTitle}>Publicacao</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Denunciar publicacao" onPress={onReport} style={styles.feedDetailIconButton}>
+            <Ionicons name="flag-outline" size={21} color={colors.ink} />
+          </Pressable>
+        </View>
+
+        <ScrollView contentContainerStyle={styles.feedDetailContent} keyboardShouldPersistTaps="handled">
+          <Pressable accessibilityRole="button" accessibilityLabel={`Abrir perfil de ${post.author}`} onPress={onOpenAuthor} style={styles.feedDetailAuthorRow}>
+            <Image accessibilityLabel={`Foto de ${post.author}`} source={imageSource(post.avatar)} style={styles.feedDetailAvatar} />
+            <View style={styles.feedDetailAuthorCopy}>
+              <Text style={styles.feedDetailAuthor}>{post.author || 'Usuario Dine'}</Text>
+              <Text style={styles.feedDetailMeta}>{post.handle || '@dine'} • {formatPostDate(post.createdAt)}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={19} color={colors.muted} />
+          </Pressable>
+
+          <View style={[styles.feedDetailGallery, { width: imageWidth }]}>
+            <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false}>
+              {images.map((photo, index) => (
+                <Image
+                  key={`${post.id}-detail-${index}`}
+                  accessibilityLabel={`${post.caption || post.title || 'Foto da publicacao'} ${index + 1} de ${images.length}`}
+                  source={imageSource(photo)}
+                  style={[styles.feedDetailImage, { width: imageWidth }]}
+                />
+              ))}
+            </ScrollView>
+            {images.length > 1 ? <Text style={styles.feedDetailPhotoCount}>{images.length} fotos</Text> : null}
+          </View>
+
+          <View style={styles.feedDetailBody}>
+            <View style={styles.feedDetailActions}>
+              <Pressable accessibilityRole="button" accessibilityLabel={reaction?.liked ? 'Descurtir publicacao' : 'Curtir publicacao'} onPress={onLike} style={styles.feedDetailActionButton}>
+                <Ionicons name={reaction?.liked ? 'heart' : 'heart-outline'} size={25} color={reaction?.liked ? colors.redDark : colors.ink} />
+                <Text style={styles.feedDetailActionText}>{likes}</Text>
+              </Pressable>
+              <View style={styles.feedDetailActionButton}>
+                <Ionicons name="chatbubble-outline" size={23} color={colors.ink} />
+                <Text style={styles.feedDetailActionText}>{comments.length}</Text>
+              </View>
+              <Pressable accessibilityRole="button" accessibilityLabel="Compartilhar publicacao" onPress={onShare} style={styles.feedDetailActionButton}>
+                <Ionicons name="share-social-outline" size={24} color={colors.ink} />
+              </Pressable>
+              <View style={styles.feedDetailActionSpacer} />
+              <Pressable accessibilityRole="button" accessibilityLabel={reaction?.saved ? 'Remover dos salvos' : 'Salvar publicacao'} onPress={onSave} style={styles.feedDetailActionButton}>
+                <Ionicons name={reaction?.saved ? 'bookmark' : 'bookmark-outline'} size={24} color={reaction?.saved ? colors.redDark : colors.ink} />
+              </Pressable>
+            </View>
+
+            {post.title ? <Text style={styles.feedDetailTitle}>{post.title}</Text> : null}
+            {post.caption ? <Text style={styles.feedDetailCaption}>{post.caption}</Text> : null}
+
+            {restaurant ? (
+              <Pressable
+                accessibilityRole={linkedRestaurant ? 'button' : 'text'}
+                accessibilityLabel={linkedRestaurant ? `Ver restaurante ${restaurant.name}` : `Restaurante informado: ${restaurant.name}`}
+                disabled={!linkedRestaurant}
+                onPress={onOpenRestaurant}
+                style={({ pressed }) => [styles.feedDetailRestaurant, pressed && linkedRestaurant && styles.activePress]}
+              >
+                <Image source={imageSource(restaurant.logo || restaurant.image)} style={styles.feedDetailRestaurantImage} />
+                <View style={styles.feedDetailRestaurantCopy}>
+                  <Text style={styles.feedDetailRestaurantEyebrow}>Publicado em</Text>
+                  <Text style={styles.feedDetailRestaurantName} numberOfLines={1}>{restaurant.name}</Text>
+                  <Text style={styles.feedDetailRestaurantMeta} numberOfLines={1}>{restaurant.type} • {restaurant.district}</Text>
+                </View>
+                {linkedRestaurant ? <Text style={styles.feedDetailRestaurantLink}>Ver restaurante</Text> : null}
+              </Pressable>
+            ) : null}
+
+            <View style={styles.feedDetailCommentsSection}>
+              <Text style={styles.feedDetailSectionTitle}>Comentarios</Text>
+              {comments.length ? comments.map((comment) => (
+                <View key={comment.id} style={styles.feedDetailComment}>
+                  <View style={styles.feedDetailCommentAvatar}>
+                    <Text style={styles.feedDetailCommentInitial}>{String(comment.author || 'D').slice(0, 1).toUpperCase()}</Text>
+                  </View>
+                  <View style={styles.feedDetailCommentCopy}>
+                    <Text style={styles.feedDetailCommentAuthor}>{comment.author || 'Usuario Dine'}</Text>
+                    <Text style={styles.feedDetailCommentText}>{comment.text}</Text>
+                    {comment.createdAt ? <Text style={styles.feedDetailCommentDate}>{formatPostDate(comment.createdAt)}</Text> : null}
+                  </View>
+                </View>
+              )) : (
+                <Text style={styles.feedDetailEmptyComments}>Ainda nao ha comentarios. Comece a conversa.</Text>
+              )}
+              <View style={styles.feedDetailComposer}>
+                <TextInput
+                  accessibilityLabel="Adicionar comentario"
+                  value={commentDraft}
+                  onChangeText={onChangeComment}
+                  placeholder="Adicione um comentario..."
+                  placeholderTextColor="#8A8179"
+                  maxLength={1000}
+                  multiline
+                  style={styles.feedDetailCommentInput}
+                />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Publicar comentario"
+                  accessibilityState={{ disabled: !String(commentDraft || '').trim() }}
+                  disabled={!String(commentDraft || '').trim()}
+                  onPress={onAddComment}
+                  style={[styles.feedDetailSendButton, !String(commentDraft || '').trim() && styles.buttonDisabled]}
+                >
+                  <Ionicons name="send" size={18} color={colors.card} />
+                </Pressable>
+              </View>
+            </View>
+
+            {canDelete ? (
+              <Pressable accessibilityRole="button" accessibilityLabel="Excluir publicacao" onPress={onDelete} style={styles.feedDetailDeleteButton}>
+                <Ionicons name="trash-outline" size={19} color={colors.redDark} />
+                <Text style={styles.feedDetailDeleteText}>Excluir publicacao</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </ScrollView>
+      </SafeAreaView>
+    </Modal>
+  );
+}
+
 function PostViewerModal({ visible, restaurant, post, liked, likesCount, onClose, onLike, onReport }) {
   if (!visible || !restaurant || !post) return null;
   return (
@@ -5765,6 +6086,16 @@ function PostViewerModal({ visible, restaurant, post, liked, likesCount, onClose
             <View style={styles.postViewerChips}>
               <View style={styles.postViewerChip}><Text style={styles.postViewerChipText}>{restaurant.type}</Text></View>
               <View style={styles.postViewerChip}><Text style={styles.postViewerChipText}>{restaurant.district}</Text></View>
+            </View>
+            <View style={styles.postViewerSocialActions}>
+              <Pressable accessibilityRole="button" accessibilityLabel={liked ? 'Descurtir publicacao' : 'Curtir publicacao'} onPress={onLike} style={styles.postViewerSocialButton}>
+                <Ionicons name={liked ? 'heart' : 'heart-outline'} size={22} color={liked ? colors.redDark : colors.ink} />
+                <Text style={styles.postViewerSocialText}>{likesCount}</Text>
+              </Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="Denunciar publicacao" onPress={onReport} style={styles.postViewerSocialButton}>
+                <Ionicons name="flag-outline" size={20} color={colors.ink} />
+                <Text style={styles.postViewerSocialText}>Denunciar</Text>
+              </Pressable>
             </View>
           </View>
             {post.url ? (
@@ -5956,7 +6287,7 @@ function OnboardingModal({ visible, slides, index, onNext, onSkip }) {
   );
 }
 
-function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, required = false }) {
+function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, submitting = false, required = false }) {
   if (!mode) return null;
   const title = mode === 'login' ? 'Acesse sua conta' : mode === 'signup' ? 'Comece no Dine' : 'Cadastrar restaurante';
   if (required) {
@@ -5971,8 +6302,8 @@ function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, required = fals
               {mode === 'signup' ? <Field label="Nome" value={form.name} onChangeText={(value) => setForm({ ...form, name: value })} /> : null}
               <Field label="E-mail" value={form.email} onChangeText={(value) => setForm({ ...form, email: value })} keyboardType="email-address" autoCapitalize="none" />
               <Field label="Senha" value={form.password} onChangeText={(value) => setForm({ ...form, password: value })} secureTextEntry />
-              <AppButton onPress={onSubmitAuth}>{mode === 'login' ? 'Entrar' : 'Criar conta'}</AppButton>
-              <AppButton kind="secondary" onPress={() => setMode(mode === 'login' ? 'signup' : 'login')}>
+              <AppButton disabled={submitting} onPress={onSubmitAuth}>{submitting ? 'Aguarde...' : mode === 'login' ? 'Entrar' : 'Criar conta'}</AppButton>
+              <AppButton disabled={submitting} kind="secondary" onPress={() => setMode(mode === 'login' ? 'signup' : 'login')}>
                 {mode === 'login' ? 'Criar nova conta' : 'Já tenho conta'}
               </AppButton>
             </View>
@@ -5996,8 +6327,8 @@ function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, required = fals
           {mode === 'signup' ? <Field label="Nome" value={form.name} onChangeText={(value) => setForm({ ...form, name: value })} /> : null}
           <Field label="E-mail" value={form.email} onChangeText={(value) => setForm({ ...form, email: value })} keyboardType="email-address" autoCapitalize="none" />
           <Field label="Senha" value={form.password} onChangeText={(value) => setForm({ ...form, password: value })} secureTextEntry />
-          <AppButton onPress={onSubmitAuth}>{mode === 'login' ? 'Entrar' : 'Criar conta'}</AppButton>
-          <AppButton kind="secondary" onPress={() => setMode(mode === 'login' ? 'signup' : 'login')}>
+          <AppButton disabled={submitting} onPress={onSubmitAuth}>{submitting ? 'Aguarde...' : mode === 'login' ? 'Entrar' : 'Criar conta'}</AppButton>
+          <AppButton disabled={submitting} kind="secondary" onPress={() => setMode(mode === 'login' ? 'signup' : 'login')}>
             {mode === 'login' ? 'Criar nova conta' : 'Já tenho conta'}
           </AppButton>
         </ScrollView>
@@ -6010,7 +6341,7 @@ function Field({ label, ...props }) {
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput placeholderTextColor="#a19a90" style={[styles.fieldInput, props.multiline && styles.fieldTextarea]} {...props} />
+      <TextInput accessibilityLabel={props.accessibilityLabel || label} placeholderTextColor="#a19a90" style={[styles.fieldInput, props.multiline && styles.fieldTextarea]} {...props} />
     </View>
   );
 }
@@ -6117,6 +6448,7 @@ const styles = StyleSheet.create({
   avatarText: { color: colors.gold, fontWeight: '900', fontSize: 18 },
   actionGrid: { flexDirection: 'row', gap: 10 },
   button: { minHeight: 48, borderRadius: 18, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
+  buttonDisabled: { opacity: 0.48 },
   primaryButton: { backgroundColor: colors.green },
   secondaryButton: { backgroundColor: colors.greenSoft },
   buttonText: { fontWeight: '900' },
@@ -6858,8 +7190,53 @@ Object.assign(styles, {
   postViewerChips: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   postViewerChip: { borderRadius: 999, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 10, paddingVertical: 6 },
   postViewerChipText: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 12 },
+  postViewerSocialActions: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  postViewerSocialButton: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  postViewerSocialText: { color: colors.ink, fontFamily: bodyFont, fontSize: 13 },
   postViewerAction: { minHeight: 48, marginHorizontal: 14, marginBottom: 14, borderRadius: 14, backgroundColor: colors.redDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   postViewerActionText: { color: colors.card, fontFamily: bodyFont, fontSize: 14 },
+  feedDetailSafe: { flex: 1, backgroundColor: colors.bg },
+  feedDetailTopBar: { width: '100%', maxWidth: 720, alignSelf: 'center', minHeight: 58, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: colors.line, backgroundColor: colors.bg },
+  feedDetailTopTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 16 },
+  feedDetailIconButton: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
+  feedDetailContent: { width: '100%', maxWidth: 720, alignSelf: 'center', paddingBottom: 48, backgroundColor: colors.bg },
+  feedDetailAuthorRow: { minHeight: 68, paddingHorizontal: 14, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  feedDetailAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line },
+  feedDetailAuthorCopy: { flex: 1, minWidth: 0 },
+  feedDetailAuthor: { color: colors.ink, fontFamily: bodyFont, fontSize: 15 },
+  feedDetailMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, marginTop: 2 },
+  feedDetailGallery: { alignSelf: 'center', overflow: 'hidden', backgroundColor: colors.surface },
+  feedDetailImage: { aspectRatio: 1, backgroundColor: colors.surface },
+  feedDetailPhotoCount: { position: 'absolute', right: 12, top: 12, overflow: 'hidden', borderRadius: 12, backgroundColor: 'rgba(0,0,0,0.52)', paddingHorizontal: 9, paddingVertical: 4, color: colors.card, fontFamily: bodyFont, fontSize: 12 },
+  feedDetailBody: { paddingHorizontal: 16, paddingTop: 12, gap: 14 },
+  feedDetailActions: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: 14 },
+  feedDetailActionButton: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  feedDetailActionText: { color: colors.ink, fontFamily: bodyFont, fontSize: 13 },
+  feedDetailActionSpacer: { flex: 1 },
+  feedDetailTitle: { color: colors.ink, fontFamily: titleFont, fontWeight: '900', fontSize: 24, lineHeight: 29 },
+  feedDetailCaption: { color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 15, lineHeight: 22 },
+  feedDetailRestaurant: { minHeight: 76, borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.line, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 11 },
+  feedDetailRestaurantImage: { width: 52, height: 52, borderRadius: 12, backgroundColor: colors.surface },
+  feedDetailRestaurantCopy: { flex: 1, minWidth: 0 },
+  feedDetailRestaurantEyebrow: { color: colors.redDark, fontFamily: 'Nunito_700Bold', fontSize: 10, textTransform: 'uppercase' },
+  feedDetailRestaurantName: { color: colors.ink, fontFamily: bodyFont, fontSize: 15, marginTop: 2 },
+  feedDetailRestaurantMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, marginTop: 2 },
+  feedDetailRestaurantLink: { color: colors.redDark, fontFamily: bodyFont, fontSize: 12 },
+  feedDetailCommentsSection: { gap: 12 },
+  feedDetailSectionTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 17 },
+  feedDetailComment: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  feedDetailCommentAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  feedDetailCommentInitial: { color: colors.card, fontFamily: bodyFont, fontSize: 13 },
+  feedDetailCommentCopy: { flex: 1, minWidth: 0 },
+  feedDetailCommentAuthor: { color: colors.ink, fontFamily: bodyFont, fontSize: 13 },
+  feedDetailCommentText: { color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 14, lineHeight: 20, marginTop: 2 },
+  feedDetailCommentDate: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11, marginTop: 3 },
+  feedDetailEmptyComments: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 14, lineHeight: 20 },
+  feedDetailComposer: { minHeight: 48, borderWidth: 1, borderColor: colors.line, borderRadius: 16, backgroundColor: colors.surface, paddingLeft: 12, paddingRight: 5, paddingVertical: 5, flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  feedDetailCommentInput: { flex: 1, minWidth: 0, maxHeight: 110, paddingVertical: 8, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 14, textAlignVertical: 'top' },
+  feedDetailSendButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  feedDetailDeleteButton: { minHeight: 46, borderTopWidth: 1, borderTopColor: colors.line, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  feedDetailDeleteText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 14 },
   pagePanel: { gap: 12, borderRadius: 18, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, padding: 16, marginBottom: 14 },
   panelTitle: { color: colors.ink, fontFamily: titleFont, fontWeight: '900', fontSize: 22 },
   panelText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 14, lineHeight: 20 },

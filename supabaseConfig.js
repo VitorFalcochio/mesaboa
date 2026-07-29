@@ -510,6 +510,83 @@ export async function createFeedPostInDb(post, user) {
   });
 }
 
+export async function fetchFeedDataFromDb(userId = '') {
+  const client = requireClient();
+  if (!client) return null;
+
+  const { data: postRows, error: postsError } = await client
+    .from('feed_posts')
+    .select('*')
+    .eq('status', 'published')
+    .order('created_at', { ascending: false })
+    .limit(100);
+  throwIfError(postsError);
+
+  const postIds = (postRows || []).map((row) => row.legacy_id).filter(Boolean);
+  if (!postIds.length) return { posts: [], reactions: {} };
+
+  const [{ data: commentRows, error: commentsError }, { data: reactionRows, error: reactionsError }] = await Promise.all([
+    client.from('feed_comments').select('*').in('post_legacy_id', postIds).eq('status', 'published').order('created_at', { ascending: true }),
+    client.from('feed_reactions').select('*').in('post_legacy_id', postIds).eq('active', true)
+  ]);
+  throwIfError(commentsError);
+  throwIfError(reactionsError);
+
+  const commentsByPost = (commentRows || []).reduce((result, row) => {
+    const comment = {
+      ...(row.app_payload || {}),
+      id: row.legacy_id,
+      author: row.author_name || row.app_payload?.author || 'Usuario Dine',
+      userId: row.author_legacy_id,
+      createdAt: row.created_at
+    };
+    result[row.post_legacy_id] = [...(result[row.post_legacy_id] || []), comment];
+    return result;
+  }, {});
+
+  const reactionCounts = {};
+  const reactions = {};
+  (reactionRows || []).forEach((row) => {
+    const postId = row.post_legacy_id;
+    const reaction = row.reaction;
+    reactionCounts[postId] = reactionCounts[postId] || {};
+    reactionCounts[postId][reaction] = (reactionCounts[postId][reaction] || 0) + 1;
+    if (userId && String(row.user_legacy_id) === String(userId)) {
+      reactions[postId] = { ...(reactions[postId] || {}), [reaction]: true };
+    }
+  });
+
+  const posts = (postRows || []).map((row) => {
+    const payload = row.app_payload || {};
+    const ownLike = reactions[row.legacy_id]?.liked ? 1 : 0;
+    const ownRepost = reactions[row.legacy_id]?.reposted ? 1 : 0;
+    return {
+      ...payload,
+      id: row.legacy_id,
+      authorId: row.author_legacy_id || payload.authorId,
+      createdAt: payload.createdAt || row.created_at,
+      comments: commentsByPost[row.legacy_id] || payload.comments || [],
+      likes: Number(payload.likes || 0) + Math.max(0, Number(reactionCounts[row.legacy_id]?.liked || 0) - ownLike),
+      reposts: Number(payload.reposts || 0) + Math.max(0, Number(reactionCounts[row.legacy_id]?.reposted || 0) - ownRepost)
+    };
+  });
+
+  return { posts, reactions };
+}
+
+export async function deleteFeedPostInDb(postId, user) {
+  if (!postId) return;
+  assertSignedIn(user);
+  const client = requireClient();
+  if (!client) return;
+  const { error } = await client
+    .from('feed_posts')
+    .update({ status: 'deleted', updated_at: nowIso() })
+    .eq('legacy_id', String(postId))
+    .eq('author_legacy_id', String(user.id));
+  throwIfError(error);
+}
+
 export async function addFeedCommentToDb(postId, comment, user) {
   if (!postId || !comment?.id) return;
   assertSignedIn(user);
@@ -583,7 +660,11 @@ export async function createInviteLinkInDb(user) {
   assertSignedIn(user);
   const code = normalizeText(`${user.name || 'dine'}-${user.id}`).replace(/[^a-z0-9]/g, '').slice(0, 16) || String(user.id);
   const id = `${user.id}_${code}`;
-  const link = `https://dine.app/invite/${code}`;
+  const publicAppUrl = String(
+    process.env.EXPO_PUBLIC_APP_URL
+    || (typeof window !== 'undefined' ? window.location.origin : '')
+  ).replace(/\/+$/, '');
+  const link = publicAppUrl ? `${publicAppUrl}/invite/${code}` : '';
   await upsertByLegacyId('invites', {
     legacy_id: id,
     code,

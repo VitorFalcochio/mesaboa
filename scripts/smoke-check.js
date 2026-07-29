@@ -79,6 +79,34 @@ check('App Store review controls are present', () => {
   if (!supabase.includes('deleteUserAccountInDb')) throw new Error('missing remote account deletion helper');
 });
 
+check('social post detail flow is wired', () => {
+  const app = read('App.js');
+  const supabase = read('supabaseConfig.js');
+  [
+    'function FeedPostDetailModal',
+    'onPress={() => openFeedPost(post)}',
+    'Publicado em',
+    'commentsForPost(post, reaction)',
+    'onAddComment',
+    'onOpenRestaurant',
+    'onOpenAuthor'
+  ].forEach((needle) => {
+    if (!app.includes(needle)) throw new Error(`missing ${needle}`);
+  });
+  if (!supabase.includes('fetchFeedDataFromDb')) throw new Error('missing remote feed hydration');
+  if (!supabase.includes('deleteFeedPostInDb')) throw new Error('missing owned post deletion helper');
+});
+
+check('web map markers stay coordinate anchored', () => {
+  const app = read('App.js');
+  if (!app.includes('style={[styles.webMapMarker, { left: point.left, top: point.top }]}')) {
+    throw new Error('web marker is not positioned from its projected coordinate');
+  }
+  if (app.includes('Math.max(18, Math.min(webMapWidth - 18, webPointForItem')) {
+    throw new Error('web marker still clamps independently from its map coordinate');
+  }
+});
+
 check('style override debt is tracked', () => {
   const app = read('App.js');
   const layers = (app.match(/Object\.assign\(styles/g) || []).length;
