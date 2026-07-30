@@ -25,6 +25,7 @@ EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=
 EXPO_PUBLIC_ADMIN_EMAIL=
 EXPO_PUBLIC_ADMIN_EMAILS=
 EXPO_PUBLIC_ENABLE_DEMO_DATA=false
+EXPO_PUBLIC_USE_SUPABASE_AUTH=false
 EXPO_PUBLIC_PRIVACY_POLICY_URL=
 EXPO_PUBLIC_APP_URL=
 EXPO_PUBLIC_SUPPORT_EMAIL=
@@ -103,7 +104,14 @@ Fluxo atual:
 
 Nota de seguranca:
 
-O app ainda usa contas locais/demo, nao Supabase Auth. Por isso a migration de compatibilidade libera policies para `anon` sincronizar os dados esperados pelo app. Para producao, o proximo passo recomendado e migrar login/perfil para Supabase Auth e endurecer RLS usando `auth.uid()`.
+O modo seguro usa Supabase Auth, RLS por `auth.uid()`, Storage por proprietário e criação transacional de reservas. A ativação é gradual:
+
+1. Aplique todas as migrations, incluindo `202607300003_backend_hardening.sql`.
+2. No painel do Supabase, em Authentication > Providers > Email, desative **Confirm email** enquanto o produto não usar confirmação por e-mail.
+3. Valide cadastro e login em homologação.
+4. Defina `EXPO_PUBLIC_USE_SUPABASE_AUTH=true` no ambiente que será publicado.
+
+Com a flag desligada, o fluxo local legado continua disponível para desenvolvimento. Ele não deve ser usado em produção depois que a migration de hardening for aplicada, porque as escritas anônimas passam a ser bloqueadas.
 
 ## Gamificacao
 

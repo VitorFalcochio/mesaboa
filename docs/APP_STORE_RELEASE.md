@@ -59,14 +59,14 @@ Preencher antes de enviar para review:
 
 Antes de usar dados reais, resolver uma destas opcoes:
 
-- Migrar login/perfil para Supabase Auth e trocar as policies abertas para regras baseadas em `auth.uid()`.
-- Manter o app como catalogo/social beta, mas publicar sabendo que as migrations atuais permitem sincronizacao ampla para `anon`.
+- Aplicar `202607300003_backend_hardening.sql`, validar RLS/Storage e ativar `EXPO_PUBLIC_USE_SUPABASE_AUTH=true`.
+- Desativar `Confirm email` no Supabase enquanto o produto nao usar confirmacao por e-mail.
 
 Pendencias conhecidas no codigo atual:
 
 - Contas locais/demo ainda existem em `App.js`, mas ficam desativadas por padrao.
 - A flag `EXPO_PUBLIC_ENABLE_DEMO_DATA` deve ficar `false` em producao.
-- Policies em `supabase/migrations/202607210001_app_supabase_facade.sql` permitem escrita ampla para `anon`.
+- A flag `EXPO_PUBLIC_USE_SUPABASE_AUTH` deve ficar `true` em producao depois da migration de hardening.
 - Publicar a politica de privacidade completa em uma URL real antes do envio.
 
 ## UGC e guideline 1.2

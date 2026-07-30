@@ -1,15 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
 export const supabaseReady = Boolean(supabaseUrl && supabaseAnonKey);
+export const supabaseAuthEnabled = supabaseReady
+  && process.env.EXPO_PUBLIC_USE_SUPABASE_AUTH === 'true';
 
 export const supabase = supabaseReady
   ? createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
-        persistSession: false,
-        autoRefreshToken: false,
+        storage: AsyncStorage,
+        persistSession: true,
+        autoRefreshToken: true,
         detectSessionInUrl: false
       }
     })
@@ -61,6 +65,81 @@ function throwIfError(error) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function authUserToAppUser(authUser, profile = null) {
+  if (!authUser) return null;
+  const metadata = authUser.user_metadata || {};
+  const payload = profile?.app_payload || {};
+  return {
+    ...payload,
+    id: authUser.id,
+    name: profile?.full_name || metadata.full_name || metadata.name || '',
+    email: authUser.email || profile?.email || '',
+    accountType: profile?.account_type || metadata.account_type || 'user',
+    instagram: profile?.instagram || payload.instagram || '',
+    photo: profile?.photo_url || metadata.avatar_url || payload.photo || '',
+    bio: profile?.bio || payload.bio || '',
+    location: profile?.location || payload.location || '',
+    preferences: profile?.preferences || payload.preferences || [],
+    createdAt: authUser.created_at || profile?.created_at || nowIso()
+  };
+}
+
+async function appUserForAuthUser(authUser) {
+  if (!authUser) return null;
+  const client = requireClient();
+  const { data, error } = await client
+    .from('app_profiles')
+    .select('*')
+    .eq('legacy_id', authUser.id)
+    .maybeSingle();
+  throwIfError(error);
+  return authUserToAppUser(authUser, data);
+}
+
+export async function signUpWithSupabase({ email, password, name, accountType }) {
+  if (!supabaseAuthEnabled) throw new Error('SUPABASE_AUTH_DISABLED');
+  const client = requireClient();
+  const { data, error } = await client.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        full_name: String(name || '').trim(),
+        account_type: accountType === 'restaurant_owner' ? 'restaurant_owner' : 'user'
+      }
+    }
+  });
+  throwIfError(error);
+  if (!data.session) throw new Error('EMAIL_CONFIRMATION_REQUIRED');
+  return appUserForAuthUser(data.user);
+}
+
+export async function signInWithSupabase({ email, password }) {
+  if (!supabaseAuthEnabled) throw new Error('SUPABASE_AUTH_DISABLED');
+  const client = requireClient();
+  const { data, error } = await client.auth.signInWithPassword({ email, password });
+  throwIfError(error);
+  return appUserForAuthUser(data.user);
+}
+
+export async function getSupabaseCurrentUser() {
+  if (!supabaseAuthEnabled) return null;
+  const client = requireClient();
+  const { data: sessionData, error: sessionError } = await client.auth.getSession();
+  throwIfError(sessionError);
+  if (!sessionData.session?.user) return null;
+  const { data, error } = await client.auth.getUser();
+  throwIfError(error);
+  return appUserForAuthUser(data.user);
+}
+
+export async function signOutFromSupabase() {
+  if (!supabaseAuthEnabled) return;
+  const client = requireClient();
+  const { error } = await client.auth.signOut();
+  throwIfError(error);
 }
 
 function safeId(value, fallback = `${Date.now()}`) {
@@ -134,6 +213,7 @@ function restaurantToDb(item, user = null) {
   const metrics = item?.metrics || {};
   return cleanData({
     legacy_id: legacyId,
+    owner_id: supabaseAuthEnabled && user?.id ? user.id : undefined,
     owner_legacy_id: item?.ownerId || user?.id || null,
     name: item?.name || 'Restaurante',
     slug: item?.slug || slugify(`${item?.name || 'restaurante'}-${legacyId}`),
@@ -1008,6 +1088,21 @@ export async function fetchReservationStateFromDb({ userId = '', restaurantIds =
 
 export async function saveReservationToDb(reservation) {
   if (!reservation?.id) return;
+  if (supabaseAuthEnabled) {
+    const client = requireClient();
+    const { data, error } = await client.rpc('create_reservation_secure', {
+      p_restaurant_legacy_id: String(reservation.restaurantId),
+      p_reservation_date: reservation.date,
+      p_reservation_time: reservation.time,
+      p_party_size: Number(reservation.partySize || 1),
+      p_payload: cleanData(reservation),
+      p_idempotency_key: String(reservation.id)
+    });
+    throwIfError(error);
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error('RESERVATION_NOT_CREATED');
+    return normalizeReservationRow(row);
+  }
   await upsertByLegacyId('app_reservations', {
     legacy_id: String(reservation.id),
     restaurant_legacy_id: String(reservation.restaurantId),
@@ -1019,6 +1114,20 @@ export async function saveReservationToDb(reservation) {
     app_payload: cleanData(reservation),
     updated_at: nowIso()
   });
+  return reservation;
+}
+
+export async function updateReservationStatusSecureInDb(reservationId, status) {
+  if (!reservationId) return null;
+  if (!supabaseAuthEnabled) return null;
+  const client = requireClient();
+  const { data, error } = await client.rpc('update_reservation_status_secure', {
+    p_legacy_id: String(reservationId),
+    p_status: String(status)
+  });
+  throwIfError(error);
+  const row = Array.isArray(data) ? data[0] : data;
+  return row ? normalizeReservationRow(row) : null;
 }
 
 export async function saveWaitlistEntryToDb(entry) {
