@@ -1,5 +1,9 @@
 const { defineConfig } = require('@playwright/test');
 
+const previewPort = process.env.PLAYWRIGHT_PREVIEW_PORT || '4173';
+const previewDirectory = process.env.PLAYWRIGHT_PREVIEW_DIR || 'dist';
+const baseURL = process.env.PLAYWRIGHT_BASE_URL || `http://127.0.0.1:${previewPort}`;
+
 const viewports = [
   ['320px', 320, 568],
   ['375px', 375, 812],
@@ -21,7 +25,7 @@ module.exports = defineConfig({
   retries: 0,
   reporter: 'line',
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL,
     trace: 'retain-on-failure'
   },
   projects: viewports.map(([name, width, height]) => ({
@@ -32,8 +36,8 @@ module.exports = defineConfig({
     }
   })),
   webServer: {
-    command: 'npx serve dist -l 4173 --no-clipboard',
-    url: 'http://127.0.0.1:4173',
+    command: `npx serve ${previewDirectory} -l ${previewPort} --no-clipboard`,
+    url: baseURL,
     reuseExistingServer: true,
     timeout: 30_000
   }

@@ -407,6 +407,44 @@ const discoveryCategoryAssets = {
   brasileira: require('./assets/categories/categoria-brasileira.png'),
   cafes: require('./assets/categories/categoria-cafes.png')
 };
+const discoveryCampaigns = [
+  {
+    id: 'dine-promo',
+    eyebrow: 'OFERTA DO DINE',
+    title: 'Hoje combina com burger',
+    text: 'Encontre sabores e promoções para aproveitar agora.',
+    cta: 'Ver ofertas',
+    destinationTitle: 'Ofertas para você',
+    image: require('./assets/campaigns/mascot-concepts/mascote-promocao.png')
+  },
+  {
+    id: 'dine-live-music',
+    eyebrow: 'EVENTOS',
+    title: 'Jantar com música ao vivo',
+    text: 'Descubra experiências que transformam a noite.',
+    cta: 'Ver eventos',
+    destinationTitle: 'Eventos e experiências',
+    image: require('./assets/campaigns/mascot-concepts/mascote-musica-ao-vivo.png')
+  },
+  {
+    id: 'dine-special-dinner',
+    eyebrow: 'MOMENTO ESPECIAL',
+    title: 'Uma mesa para celebrar',
+    text: 'Escolha o lugar perfeito para uma noite inesquecível.',
+    cta: 'Encontrar lugar',
+    destinationTitle: 'Jantar especial',
+    image: require('./assets/campaigns/mascot-concepts/mascote-jantar-especial.png')
+  },
+  {
+    id: 'dine-nearby',
+    eyebrow: 'PERTO DE VOCÊ',
+    title: 'Tem lugar novo na área',
+    text: 'Explore restaurantes que acabaram de chegar ao Dine.',
+    cta: 'Descobrir agora',
+    destinationTitle: 'Novidades perto de você',
+    image: require('./assets/campaigns/mascot-concepts/mascote-descoberta-local.png')
+  }
+];
 
 const collectionCurations = [
   {
@@ -1562,7 +1600,6 @@ export default function App() {
   const { width } = useWindowDimensions();
   const systemColorScheme = useColorScheme();
   const compact = width < 380;
-  const homeDiscoveryCardWidth = Math.max(280, width - 36);
   const screenFade = useRef(new Animated.Value(1)).current;
   const startupSplashOpacity = useRef(new Animated.Value(1)).current;
   const startupLogoScale = useRef(new Animated.Value(0.82)).current;
@@ -1570,7 +1607,6 @@ export default function App() {
   const startupPulse = useRef(new Animated.Value(0)).current;
   const homeDiscoveryAnim = useRef(new Animated.Value(1)).current;
   const homeDiscoverySheen = useRef(new Animated.Value(0)).current;
-  const homeDiscoveryScrollRef = useRef(null);
   const mainScrollRef = useRef(null);
   const demoRestaurantSeededRef = useRef(false);
   const favoritesMutationRef = useRef(0);
@@ -1634,7 +1670,7 @@ export default function App() {
   const [waitlistEntries, setWaitlistEntries] = useState([]);
   const [reservationRestaurant, setReservationRestaurant] = useState(null);
   const [reservationCelebration, setReservationCelebration] = useState(null);
-  const [favoriteCelebration, setFavoriteCelebration] = useState(null);
+  const [actionCelebration, setActionCelebration] = useState(null);
   const [restaurantCelebration, setRestaurantCelebration] = useState(null);
   const [feedReactions, setFeedReactions] = useState({});
   const [feedCommentDrafts, setFeedCommentDrafts] = useState({});
@@ -2229,15 +2265,6 @@ export default function App() {
   const favoriteRestaurants = restaurants.filter((item) => favorites.includes(item.name));
 
   useEffect(() => {
-    if (!discoveryRestaurants.length || !homeDiscoveryScrollRef.current) return;
-    const index = homeDiscoveryIndex % discoveryRestaurants.length;
-    homeDiscoveryScrollRef.current.scrollTo({
-      x: index * homeDiscoveryCardWidth,
-      animated: true
-    });
-  }, [discoveryRestaurants.length, homeDiscoveryCardWidth, homeDiscoveryIndex]);
-
-  useEffect(() => {
     homeDiscoveryAnim.setValue(0);
     homeDiscoverySheen.setValue(0);
     Animated.parallel([
@@ -2306,9 +2333,14 @@ export default function App() {
     favoritesMutationRef.current += 1;
     const addingFavorite = !favorites.includes(name);
     if (addingFavorite) {
-      setFavoriteCelebration({
+      setActionCelebration({
         id: `${name}-${Date.now()}`,
-        name
+        eyebrow: '+10 pontos',
+        title: 'Boa escolha!',
+        text: `${name} foi salvo.`,
+        icon: 'heart',
+        mascot: mascotAssets.thumbsUp,
+        accessibilityLabel: 'Mascote Dine comemorando o favorito'
       });
     }
     setFavorites((items) => {
@@ -2324,6 +2356,18 @@ export default function App() {
 
   function togglePanelPostLike(restaurant, post) {
     const key = postKey(restaurant.id, post.id);
+    const liked = !panelPostLikes[key]?.liked;
+    if (liked) {
+      setActionCelebration({
+        id: `panel-like-${key}-${Date.now()}`,
+        eyebrow: 'Comunidade',
+        title: 'Curtida enviada',
+        text: `O post de ${restaurant.name} recebeu seu carinho.`,
+        icon: 'heart',
+        mascot: mascotAssets.thumbsUp,
+        accessibilityLabel: 'Mascote Dine comemorando a curtida'
+      });
+    }
     setPanelPostLikes((current) => {
       const existing = current[key] || { liked: false, count: Number(post.likes || 0) };
       return {
@@ -2383,6 +2427,24 @@ export default function App() {
     if (['liked', 'saved', 'reposted'].includes(field)) {
       setFeedReactionInDb(postId, field, active, currentUser).catch(() => {});
     }
+    if (active && ['liked', 'saved', 'reposted'].includes(field)) {
+      const post = feedPosts.find((item) => String(item.id) === String(postId));
+      const copyByField = {
+        liked: ['Comunidade', 'Curtida enviada', post?.author ? `Você curtiu o post de ${post.author}.` : 'Você curtiu essa descoberta.', 'heart', mascotAssets.thumbsUp],
+        saved: ['Guardado', 'Post salvo', 'Essa descoberta ficou salva para ver depois.', 'bookmark', mascotAssets.wave],
+        reposted: ['Compartilhado', 'Descoberta republicada', 'Agora mais gente pode encontrar esse lugar.', 'repeat', mascotAssets.thumbsUp]
+      };
+      const [eyebrow, title, text, icon, mascot] = copyByField[field];
+      setActionCelebration({
+        id: `feed-${field}-${postId}-${Date.now()}`,
+        eyebrow,
+        title,
+        text,
+        icon,
+        mascot,
+        accessibilityLabel: `Mascote Dine comemorando ${title.toLowerCase()}`
+      });
+    }
     if (active && ['liked', 'reposted'].includes(field)) {
       const post = feedPosts.find((item) => String(item.id) === String(postId));
       const targetUserId = post?.authorId || post?.authorProfile?.id;
@@ -2427,6 +2489,15 @@ export default function App() {
     }));
     setFeedCommentDrafts((current) => ({ ...current, [post.id]: '' }));
     addFeedCommentToDb(post.id, comment, currentUser).catch(() => {});
+    setActionCelebration({
+      id: `comment-${post.id}-${Date.now()}`,
+      eyebrow: 'Publicado',
+      title: 'Comentário enviado',
+      text: 'Sua conversa entrou na mesa.',
+      icon: 'chatbubble',
+      mascot: mascotAssets.wave,
+      accessibilityLabel: 'Mascote Dine comemorando o comentário'
+    });
     const targetUserId = post.authorId || post.authorProfile?.id;
     if (targetUserId && String(targetUserId) !== String(currentUser?.id)) {
       createAppNotificationInDb({
@@ -2514,6 +2585,17 @@ export default function App() {
       : [{ id: profileId, name: profile?.name || 'Perfil', handle: profile?.handle || '', avatar: profile?.avatar || '', followedAt: new Date().toISOString() }, ...following];
     socialMutationRef.current += 1;
     await updateCurrentUserProfile({ followingProfiles: nextFollowing, following: nextFollowing.length });
+    if (!isFollowing) {
+      setActionCelebration({
+        id: `follow-${profileId}-${Date.now()}`,
+        eyebrow: 'Feed afinado',
+        title: 'Você está seguindo',
+        text: `${profile?.name || 'Esse perfil'} vai aparecer mais por aqui.`,
+        icon: 'person-add',
+        mascot: mascotAssets.thumbsUp,
+        accessibilityLabel: 'Mascote Dine comemorando novo perfil seguido'
+      });
+    }
     setSelectedFeedProfile((current) => {
       if (!current || String(current.id || current.handle || current.name) !== profileId) return current;
       if (!current.socialStatsLoaded) return current;
@@ -2656,6 +2738,15 @@ export default function App() {
     setFeedComposerOpen(false);
     setTab('Feed');
     if (feedDraft.checkIn && restaurant.id) awardPoints('known', restaurant.id);
+    setActionCelebration({
+      id: `publish-${post.id}-${Date.now()}`,
+      eyebrow: feedDraft.checkIn ? '+8 pontos' : 'No ar',
+      title: 'Post publicado',
+      text: `${restaurant.name} entrou no seu feed.`,
+      icon: 'sparkles',
+      mascot: mascotAssets.thumbsUp,
+      accessibilityLabel: 'Mascote Dine comemorando a publicação'
+    });
     createFeedPostInDb(post, currentUser || { id: 'visitor-feed', name: 'Visitante' }).catch(() => {});
   }
 
@@ -3683,13 +3774,39 @@ export default function App() {
     };
     setWaitlistEntries((items) => [entry, ...items]);
     saveWaitlistEntryToDb(entry).catch(() => {});
-    Alert.alert('Entrada confirmada', 'O restaurante poderá avisar quando surgir uma mesa.');
+    setActionCelebration({
+      id: `waitlist-${entry.id}-${Date.now()}`,
+      eyebrow: 'Lista de espera',
+      title: 'Você entrou na fila',
+      text: `${item.name} poderá avisar quando surgir uma mesa.`,
+      icon: 'time',
+      mascot: mascotAssets.waitlist,
+      accessibilityLabel: 'Mascote Dine comemorando entrada na lista de espera'
+    });
     return true;
   }
 
   function updateReservationStatus(reservation, status) {
     const updated = { ...reservation, status, updatedAt: new Date().toISOString() };
     setReservations((items) => items.map((item) => item.id === reservation.id ? updated : item));
+    const statusCelebrations = {
+      confirmed: ['Agenda', 'Reserva confirmada', `${reservation.userName || 'Cliente'} já pode se preparar.`, 'checkmark'],
+      seated: ['Salão', 'Chegada registrada', `${reservation.userName || 'Cliente'} já está na mesa.`, 'restaurant'],
+      completed: ['Atendimento', 'Reserva concluída', 'Mais uma experiência fechada com capricho.', 'checkmark-done'],
+      cancelled: ['Agenda', 'Reserva cancelada', 'A agenda foi atualizada.', 'close']
+    };
+    if (statusCelebrations[status]) {
+      const [eyebrow, title, text, icon] = statusCelebrations[status];
+      setActionCelebration({
+        id: `reservation-status-${reservation.id}-${status}-${Date.now()}`,
+        eyebrow,
+        title,
+        text,
+        icon,
+        mascot: status === 'cancelled' ? mascotAssets.wave : mascotAssets.thumbsUp,
+        accessibilityLabel: `Mascote Dine informando ${title.toLowerCase()}`
+      });
+    }
     if (supabaseAuthEnabled) {
       updateReservationStatusSecureInDb(reservation.id, status)
         .then((remoteReservation) => {
@@ -3708,6 +3825,16 @@ export default function App() {
   function updateWaitlistStatus(entry, status) {
     const updated = { ...entry, status, updatedAt: new Date().toISOString() };
     setWaitlistEntries((items) => items.map((item) => item.id === entry.id ? updated : item));
+    const title = status === 'notified' ? 'Cliente avisado' : 'Espera atualizada';
+    setActionCelebration({
+      id: `waitlist-status-${entry.id}-${status}-${Date.now()}`,
+      eyebrow: 'Lista de espera',
+      title,
+      text: status === 'notified' ? `${entry.userName || 'Cliente'} recebeu o aviso.` : 'A lista do restaurante foi organizada.',
+      icon: status === 'notified' ? 'notifications' : 'checkmark',
+      mascot: mascotAssets.waitlist,
+      accessibilityLabel: `Mascote Dine informando ${title.toLowerCase()}`
+    });
     saveWaitlistEntryToDb(updated).catch(() => {});
   }
 
@@ -4131,8 +4258,8 @@ function postKey(restaurantId, postId) {
       ['Brasileira', 'brasileir', discoveryCategoryAssets.brasileira],
       ['Cafés', 'caf', discoveryCategoryAssets.cafes]
     ];
-    const featuredRestaurant = discoveryRestaurants[homeDiscoveryIndex % Math.max(1, discoveryRestaurants.length)] || topRestaurants[0];
-    const nearbyRestaurants = topRestaurants.slice(1, 6);
+    const featuredCampaign = discoveryCampaigns[homeDiscoveryIndex % discoveryCampaigns.length];
+    const nearbyRestaurants = topRestaurants.slice(0, 5);
     const newRestaurants = [...publicRestaurants]
       .sort((a, b) => Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0))
       .slice(0, 4);
@@ -4193,33 +4320,85 @@ function postKey(restaurantId, postId) {
         </ScrollView>
 
         <SectionTitle title="Perto de você" action="Ver tudo" onPress={() => navigateTo('results', { title: 'Perto de você' })} />
-        {featuredRestaurant ? (
-          <Pressable accessibilityRole="button" accessibilityLabel={`Abrir restaurante ${featuredRestaurant.name}`} onPress={() => setSelectedRestaurant(featuredRestaurant)} style={({ pressed }) => [styles.discoveryFeatureCard, pressed && styles.pressed]}>
-            <Image source={imageSource(featuredRestaurant.coverPhoto || featuredRestaurant.image || featuredRestaurant.logo)} style={styles.discoveryFeatureImage} />
-            <View style={styles.discoveryFeatureScrim} />
-            <AnimatedFavoriteButton
-              favorite={favorites.includes(featuredRestaurant.name)}
-              accessibilityLabel={favorites.includes(featuredRestaurant.name) ? `Remover ${featuredRestaurant.name} dos favoritos` : `Salvar ${featuredRestaurant.name} nos favoritos`}
-              onPress={() => toggleFavorite(featuredRestaurant.name)}
-              style={styles.discoverySaveButton}
+        <Animated.View
+          style={[
+            styles.discoveryCampaignEntrance,
+            {
+              opacity: homeDiscoveryAnim,
+              transform: [
+                { translateY: homeDiscoveryAnim.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) },
+                { scale: homeDiscoveryAnim.interpolate({ inputRange: [0, 1], outputRange: [0.985, 1] }) }
+              ]
+            }
+          ]}
+        >
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Abrir destaque ${featuredCampaign.title}`}
+            onPress={() => navigateTo('results', { title: featuredCampaign.destinationTitle })}
+            style={({ pressed }) => [styles.discoveryCampaignCard, pressed && styles.pressed]}
+          >
+            <Image source={featuredCampaign.image} resizeMode="cover" style={styles.discoveryCampaignImage} />
+            <View style={styles.discoveryCampaignScrim} />
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.discoveryCampaignSheen,
+                {
+                  transform: [{
+                    translateX: homeDiscoverySheen.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [-120, Math.max(width, 420)]
+                    })
+                  }]
+                }
+              ]}
             />
-            <View style={styles.discoveryFeatureCopy}>
-              <Text numberOfLines={1} style={styles.discoveryFeatureName}>{featuredRestaurant.name}</Text>
-              <View style={styles.discoveryFeatureMetaRow}>
-                <Text numberOfLines={1} style={styles.discoveryFeatureMeta}>{featuredRestaurant.type} • {formatDistance(featuredRestaurant.distanceKm)}</Text>
-                <View style={styles.discoveryFeatureRating}>
-                  <Ionicons name="star" size={13} color="#FFC24B" />
-                  <Text style={styles.discoveryFeatureRatingText}>{scoreValue(featuredRestaurant).toFixed(1)}</Text>
-                </View>
+            <View style={styles.discoveryCampaignCopy}>
+              <Text style={styles.discoveryCampaignEyebrow}>{featuredCampaign.eyebrow}</Text>
+              <Text numberOfLines={3} style={styles.discoveryCampaignTitle}>{featuredCampaign.title}</Text>
+              <Text numberOfLines={2} style={styles.discoveryCampaignText}>{featuredCampaign.text}</Text>
+              <View style={styles.discoveryCampaignCta}>
+                <Text style={styles.discoveryCampaignCtaText}>{featuredCampaign.cta}</Text>
+                <Ionicons name="arrow-forward" size={14} color={colors.redDark} />
               </View>
             </View>
           </Pressable>
-        ) : null}
+          <View style={styles.discoveryCampaignDots}>
+            {discoveryCampaigns.map((campaign, index) => {
+              const active = index === homeDiscoveryIndex % discoveryCampaigns.length;
+              return (
+                <Pressable
+                  key={campaign.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Mostrar destaque ${index + 1} de ${discoveryCampaigns.length}`}
+                  onPress={() => setHomeDiscoveryIndex(index)}
+                  hitSlop={8}
+                  style={[styles.discoveryCampaignDot, active && styles.discoveryCampaignDotActive]}
+                />
+              );
+            })}
+          </View>
+        </Animated.View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoveryNearbyRow}>
           {nearbyRestaurants.map((item) => (
-            <Pressable key={item.id} onPress={() => setSelectedRestaurant(item)} style={styles.discoveryNearbyCard}>
-              <Image source={imageSource(item.coverPhoto || item.image || item.logo)} style={styles.discoveryNearbyImage} />
+            <Pressable
+              key={item.id}
+              accessibilityRole="button"
+              accessibilityLabel={`Abrir restaurante ${item.name}`}
+              onPress={() => setSelectedRestaurant(item)}
+              style={styles.discoveryNearbyCard}
+            >
+              <View>
+                <Image source={imageSource(item.coverPhoto || item.image || item.logo)} style={styles.discoveryNearbyImage} />
+                <AnimatedFavoriteButton
+                  favorite={favorites.includes(item.name)}
+                  accessibilityLabel={favorites.includes(item.name) ? `Remover ${item.name} dos favoritos` : `Salvar ${item.name} nos favoritos`}
+                  onPress={() => toggleFavorite(item.name)}
+                  style={styles.discoveryNearbySaveButton}
+                />
+              </View>
               <Text numberOfLines={1} style={styles.discoveryNearbyName}>{item.name}</Text>
               <Text numberOfLines={1} style={styles.discoveryNearbyMeta}>{item.type} • {formatDistance(item.distanceKm)}</Text>
             </Pressable>
@@ -4461,19 +4640,19 @@ function postKey(restaurantId, postId) {
 
         <View style={styles.feedPostBody}>
           <View style={styles.feedActionsRow}>
-            <Pressable onPress={() => toggleFeedFlag(post.id, 'liked')} style={styles.feedActionButton}>
+            <Pressable accessibilityRole="button" accessibilityLabel={state.liked ? `Remover curtida da publicacao de ${post.author}` : `Curtir publicacao de ${post.author}`} aria-label={state.liked ? `Remover curtida da publicacao de ${post.author}` : `Curtir publicacao de ${post.author}`} onPress={() => toggleFeedFlag(post.id, 'liked')} style={styles.feedActionButton}>
               <Ionicons name={state.liked ? 'heart' : 'heart-outline'} size={22} color={state.liked ? colors.redDark : colors.ink} />
             </Pressable>
-            <Pressable onPress={() => toggleFeedFlag(post.id, 'commenting')} style={styles.feedActionButton}>
+            <Pressable accessibilityRole="button" accessibilityLabel={`Comentar publicacao de ${post.author}`} aria-label={`Comentar publicacao de ${post.author}`} onPress={() => toggleFeedFlag(post.id, 'commenting')} style={styles.feedActionButton}>
               <Ionicons name="chatbubble-outline" size={21} color={colors.ink} />
             </Pressable>
-            <Pressable onPress={() => shareFeedPost(post)} style={styles.feedActionButton}>
+            <Pressable accessibilityRole="button" accessibilityLabel={`Compartilhar publicacao de ${post.author}`} aria-label={`Compartilhar publicacao de ${post.author}`} onPress={() => shareFeedPost(post)} style={styles.feedActionButton}>
               <Ionicons name="paper-plane-outline" size={21} color={colors.ink} />
             </Pressable>
-            <Pressable onPress={() => toggleFeedFlag(post.id, 'reposted')} style={styles.feedActionButton}>
+            <Pressable accessibilityRole="button" accessibilityLabel={state.reposted ? `Remover republicacao de ${post.author}` : `Republicar descoberta de ${post.author}`} aria-label={state.reposted ? `Remover republicacao de ${post.author}` : `Republicar descoberta de ${post.author}`} onPress={() => toggleFeedFlag(post.id, 'reposted')} style={styles.feedActionButton}>
               <Ionicons name="repeat-outline" size={22} color={state.reposted ? colors.redDark : colors.ink} />
             </Pressable>
-            <Pressable onPress={() => toggleFeedFlag(post.id, 'saved')} style={[styles.feedActionButton, styles.feedSaveAction]}>
+            <Pressable accessibilityRole="button" accessibilityLabel={state.saved ? `Remover post salvo de ${post.author}` : `Salvar post de ${post.author}`} aria-label={state.saved ? `Remover post salvo de ${post.author}` : `Salvar post de ${post.author}`} onPress={() => toggleFeedFlag(post.id, 'saved')} style={[styles.feedActionButton, styles.feedSaveAction]}>
               <Ionicons name={state.saved ? 'bookmark' : 'bookmark-outline'} size={21} color={state.saved ? colors.redDark : colors.ink} />
             </Pressable>
           </View>
@@ -7385,10 +7564,10 @@ function postKey(restaurantId, postId) {
           </Pressable>
         ))}
       </View> : null}
-      <FavoriteCelebrationToast
-        key={favoriteCelebration?.id || 'favorite-celebration'}
-        celebration={favoriteCelebration}
-        onDone={() => setFavoriteCelebration(null)}
+      <ActionCelebrationToast
+        key={actionCelebration?.id || 'action-celebration'}
+        celebration={actionCelebration}
+        onDone={() => setActionCelebration(null)}
       />
       <RestaurantModal
         item={selectedRestaurant}
@@ -7722,12 +7901,12 @@ function FeedComposerModal({ visible, draft, setDraft, restaurants, onClose, onP
   );
 }
 
-function FavoriteCelebrationToast({ celebration, onDone }) {
-  const visible = Boolean(celebration?.name);
+function ActionCelebrationToast({ celebration, onDone }) {
+  const visible = Boolean(celebration?.title);
   const opacity = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.72)).current;
   const lift = useRef(new Animated.Value(18)).current;
-  const heartScale = useRef(new Animated.Value(0.4)).current;
+  const iconScale = useRef(new Animated.Value(0.4)).current;
   const onDoneRef = useRef(onDone);
 
   useEffect(() => {
@@ -7745,7 +7924,7 @@ function FavoriteCelebrationToast({ celebration, onDone }) {
       opacity.setValue(0);
       scale.setValue(reduceMotion ? 1 : 0.72);
       lift.setValue(reduceMotion ? 0 : 18);
-      heartScale.setValue(reduceMotion ? 1 : 0.4);
+      iconScale.setValue(reduceMotion ? 1 : 0.4);
 
       animation = Animated.sequence([
         Animated.parallel([
@@ -7753,8 +7932,8 @@ function FavoriteCelebrationToast({ celebration, onDone }) {
           Animated.spring(scale, { toValue: 1, friction: 5, tension: 120, useNativeDriver: true }),
           Animated.spring(lift, { toValue: 0, friction: 5, tension: 110, useNativeDriver: true }),
           Animated.sequence([
-            Animated.spring(heartScale, { toValue: reduceMotion ? 1 : 1.38, friction: 4, tension: 180, useNativeDriver: true }),
-            Animated.spring(heartScale, { toValue: 1, friction: 5, tension: 130, useNativeDriver: true })
+            Animated.spring(iconScale, { toValue: reduceMotion ? 1 : 1.38, friction: 4, tension: 180, useNativeDriver: true }),
+            Animated.spring(iconScale, { toValue: 1, friction: 5, tension: 130, useNativeDriver: true })
           ])
         ]),
         Animated.delay(reduceMotion ? 1050 : 1450),
@@ -7782,14 +7961,14 @@ function FavoriteCelebrationToast({ celebration, onDone }) {
         accessibilityLiveRegion="polite"
         style={[styles.favoriteToast, { opacity, transform: [{ translateY: lift }, { scale }] }]}
       >
-        <Image accessibilityLabel="Mascote Dine comemorando o favorito" source={mascotAssets.thumbsUp} resizeMode="contain" style={styles.favoriteToastMascot} />
+        <Image accessibilityLabel={celebration.accessibilityLabel || 'Mascote Dine comemorando a ação'} source={celebration.mascot || mascotAssets.thumbsUp} resizeMode="contain" style={styles.favoriteToastMascot} />
         <View style={styles.favoriteToastCopy}>
-          <Text style={styles.favoriteToastEyebrow}>+10 pontos</Text>
-          <Text style={styles.favoriteToastTitle}>Boa escolha!</Text>
-          <Text numberOfLines={1} style={styles.favoriteToastText}>{celebration.name} foi salvo.</Text>
+          <Text style={styles.favoriteToastEyebrow}>{celebration.eyebrow || 'Dine'}</Text>
+          <Text style={styles.favoriteToastTitle}>{celebration.title}</Text>
+          <Text numberOfLines={1} style={styles.favoriteToastText}>{celebration.text}</Text>
         </View>
-        <Animated.View style={[styles.favoriteToastHeart, { transform: [{ scale: heartScale }] }]}>
-          <Ionicons name="heart" size={21} color={colors.card} />
+        <Animated.View style={[styles.favoriteToastHeart, { transform: [{ scale: iconScale }] }]}>
+          <Ionicons name={celebration.icon || 'sparkles'} size={21} color={colors.card} />
         </Animated.View>
       </Animated.View>
     </View>
@@ -10452,6 +10631,20 @@ const styles = StyleSheet.create({
   discoveryCategory: { width: 66, alignItems: 'center', gap: 7 },
   discoveryCategoryImage: { width: 60, height: 60, borderRadius: 8, backgroundColor: colors.surface },
   discoveryCategoryLabel: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 11, textAlign: 'center' },
+  discoveryCampaignEntrance: { position: 'relative', paddingBottom: 19 },
+  discoveryCampaignCard: { height: 246, borderRadius: 16, overflow: 'hidden', backgroundColor: colors.redDark, shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 5 },
+  discoveryCampaignImage: { width: '100%', height: '100%' },
+  discoveryCampaignScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,7,3,0.08)' },
+  discoveryCampaignSheen: { position: 'absolute', top: -40, bottom: -40, width: 58, backgroundColor: 'rgba(255,255,255,0.13)', transform: [{ rotate: '12deg' }] },
+  discoveryCampaignCopy: { position: 'absolute', left: 12, top: 12, bottom: 12, width: '51%', justifyContent: 'center', alignItems: 'flex-start', gap: 5, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: 'rgba(25,14,10,0.66)' },
+  discoveryCampaignEyebrow: { color: '#FFD7C8', fontFamily: 'Nunito_800ExtraBold', fontSize: 9, letterSpacing: 1.1 },
+  discoveryCampaignTitle: { color: '#FFFFFF', fontFamily: titleFont, fontSize: 20, lineHeight: 22 },
+  discoveryCampaignText: { color: 'rgba(255,255,255,0.88)', fontFamily: 'Nunito_700Bold', fontSize: 11, lineHeight: 15 },
+  discoveryCampaignCta: { minHeight: 30, marginTop: 4, paddingHorizontal: 11, borderRadius: 15, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFFFFF' },
+  discoveryCampaignCtaText: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 10 },
+  discoveryCampaignDots: { position: 'absolute', left: 0, right: 0, bottom: 3, height: 10, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 5 },
+  discoveryCampaignDot: { width: 6, height: 6, borderRadius: 99, backgroundColor: 'rgba(27,27,27,0.22)' },
+  discoveryCampaignDotActive: { width: 18, backgroundColor: colors.redDark },
   discoveryFeatureCard: { height: 246, borderRadius: 8, overflow: 'hidden', backgroundColor: colors.ink },
   discoveryFeatureImage: { width: '100%', height: '100%' },
   discoveryFeatureScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.23)' },
@@ -10465,6 +10658,7 @@ const styles = StyleSheet.create({
   discoveryNearbyRow: { gap: 11, paddingTop: 12, paddingBottom: 3, paddingRight: 20 },
   discoveryNearbyCard: { width: 150, gap: 4 },
   discoveryNearbyImage: { width: 150, height: 102, borderRadius: 8, backgroundColor: colors.surface },
+  discoveryNearbySaveButton: { position: 'absolute', top: 7, right: 7, width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(0,0,0,0.42)', alignItems: 'center', justifyContent: 'center' },
   discoveryNearbyName: { color: colors.ink, fontFamily: bodyFont, fontSize: 14, marginTop: 2 },
   discoveryNearbyMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11 },
   discoveryNewsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 14 },
