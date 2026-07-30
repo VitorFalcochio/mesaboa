@@ -79,6 +79,32 @@ check('App Store review controls are present', () => {
   if (!supabase.includes('deleteUserAccountInDb')) throw new Error('missing remote account deletion helper');
 });
 
+check('backend hardening is wired', () => {
+  const app = read('App.js');
+  const supabase = read('supabaseConfig.js');
+  const migration = read('supabase/migrations/202607300003_backend_hardening.sql');
+  [
+    'EXPO_PUBLIC_USE_SUPABASE_AUTH',
+    'persistSession: true',
+    'signInWithSupabase',
+    'create_reservation_secure',
+    'update_reservation_status_secure'
+  ].forEach((needle) => {
+    if (!supabase.includes(needle)) throw new Error(`missing ${needle}`);
+  });
+  if (!app.includes('supabaseAuthEnabled')) throw new Error('secure auth flag is not connected to the app');
+  [
+    'drop policy if exists "App can sync published restaurant data"',
+    'drop policy if exists "app reservations compatibility write"',
+    'drop policy if exists "App can upload restaurant media"',
+    'pg_advisory_xact_lock',
+    'SLOT_FULL',
+    'grant execute on function public.create_reservation_secure'
+  ].forEach((needle) => {
+    if (!migration.includes(needle)) throw new Error(`hardening migration missing ${needle}`);
+  });
+});
+
 check('social post detail flow is wired', () => {
   const app = read('App.js');
   const supabase = read('supabaseConfig.js');

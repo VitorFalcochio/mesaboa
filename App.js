@@ -43,6 +43,11 @@ import {
   fetchSocialStateFromDb,
   fetchReservationStateFromDb,
   supabaseReady,
+  supabaseAuthEnabled,
+  getSupabaseCurrentUser,
+  signInWithSupabase,
+  signOutFromSupabase,
+  signUpWithSupabase,
   addFeedCommentToDb,
   blockAccountInDb,
   claimRestaurantInDb,
@@ -66,6 +71,7 @@ import {
   uploadRestaurantAsset,
   uploadUserProfilePhoto,
   updateRestaurantInDb,
+  updateReservationStatusSecureInDb,
   updateRestaurantStatusInDb,
   updateReviewInDb,
   setFeedReactionInDb,
@@ -1658,7 +1664,10 @@ export default function App() {
           AsyncStorage.getItem(storageKeys.waitlist)
         ]);
         const storedRestaurantCoordinates = await AsyncStorage.getItem(storageKeys.restaurantCoordinates);
-        const localUser = storedCurrentUser ? normalizeDemoAccount(JSON.parse(storedCurrentUser)) : null;
+        let localUser = storedCurrentUser ? normalizeDemoAccount(JSON.parse(storedCurrentUser)) : null;
+        if (supabaseAuthEnabled) {
+          localUser = await getSupabaseCurrentUser();
+        }
 
         if (storedRestaurants) {
           const parsedRestaurants = JSON.parse(storedRestaurants);
@@ -1676,7 +1685,7 @@ export default function App() {
         }
         const mergedUsers = [
           ...seedUsers,
-          ...(storedUsers ? JSON.parse(storedUsers) : [])
+          ...(!supabaseAuthEnabled && storedUsers ? JSON.parse(storedUsers) : [])
         ].reduce((list, user) => {
           const exists = list.some((item) => normalize(item.email) === normalize(user.email));
           const mergedUser = normalizeDemoAccount(user);
@@ -1700,7 +1709,9 @@ export default function App() {
         }
 
         if (supabaseReady) {
-          await seedRestaurantsIfEmpty(seedRestaurants, seedRestaurantLegacyNames);
+          if (!supabaseAuthEnabled) {
+            await seedRestaurantsIfEmpty(seedRestaurants, seedRestaurantLegacyNames);
+          }
           const remoteRestaurants = await fetchRestaurantsFromDb();
           if (remoteRestaurants?.length) setRestaurants(mergeSeedRestaurantMenus(remoteRestaurants));
           if (localUser) {
@@ -3089,6 +3100,11 @@ export default function App() {
   }
 
   async function logout() {
+    try {
+      await signOutFromSupabase();
+    } catch (error) {
+      Alert.alert('Sessão', 'A sessão foi removida deste aparelho, mas não foi possível avisar o servidor agora.');
+    }
     setCurrentUser(null);
     await AsyncStorage.removeItem(storageKeys.currentUser);
     setAuthMode('login');
@@ -3126,6 +3142,50 @@ export default function App() {
     }
     setAuthSubmitting(true);
     try {
+    if (supabaseAuthEnabled) {
+      if (authMode === 'signup') {
+        if (!form.accountType) {
+          setAuthError('Escolha se a conta será de usuário ou dono de restaurante.');
+          return;
+        }
+        if (!form.name || password.length < 6) {
+          setAuthError('Informe seu nome e use uma senha com pelo menos 6 caracteres.');
+          return;
+        }
+      }
+      try {
+        const authenticatedUser = authMode === 'signup'
+          ? await signUpWithSupabase({
+              email,
+              password,
+              name: form.name,
+              accountType: normalizeAccountType(form.accountType)
+            })
+          : await signInWithSupabase({ email, password });
+        const user = normalizeDemoAccount({
+          ...authenticatedUser,
+          gamification: mergeGamification(authenticatedUser?.gamification),
+          security: { lastLoginAt: new Date().toISOString(), platform: Platform.OS }
+        });
+        await saveCurrentUser(user);
+        setAuthMode(null);
+        setForm({});
+        const hadPendingAction = Boolean(pendingAction);
+        completePendingAction(user);
+        if (!hadPendingAction) openAccountHome(user, authMode === 'signup');
+      } catch (error) {
+        if (error?.message === 'EMAIL_CONFIRMATION_REQUIRED') {
+          setAuthError('Desative “Confirm email” no Supabase para entrar sem confirmação por e-mail.');
+        } else if (/invalid login credentials/i.test(error?.message || '')) {
+          setAuthError('E-mail ou senha inválidos.');
+        } else if (/already registered|already been registered/i.test(error?.message || '')) {
+          setAuthError('Este e-mail já está cadastrado. Entre com sua senha.');
+        } else {
+          setAuthError('Não foi possível autenticar agora. Tente novamente.');
+        }
+      }
+      return;
+    }
     if (authMode === 'signup') {
       if (!form.accountType) {
         setAuthError('Escolha se a conta será de usuário ou dono de restaurante.');
@@ -3380,7 +3440,7 @@ export default function App() {
     setReservationRestaurant(item);
   }
 
-  function createNativeReservation(item, draft) {
+  async function createNativeReservation(item, draft) {
     if (!currentUser?.id || !item?.id) return false;
     const settings = reservationSettingsFor(item);
     const slots = reservationSlotsForDate(item, draft.date, reservations);
@@ -3408,11 +3468,29 @@ export default function App() {
       createdAt: now,
       updatedAt: now
     };
-    setReservations((items) => [reservation, ...items]);
-    saveReservationToDb(reservation).catch(() => {});
-    recordRestaurantMetricInDb(item.id, 'reservationClicks').catch(() => {});
-    Alert.alert(settings.autoConfirm ? 'Reserva confirmada' : 'Reserva solicitada', `${item.name} • ${draft.date} às ${draft.time}`);
-    return true;
+    try {
+      const savedReservation = await saveReservationToDb(reservation);
+      const confirmedReservation = savedReservation || reservation;
+      setReservations((items) => [
+        confirmedReservation,
+        ...items.filter((existing) => existing.id !== confirmedReservation.id)
+      ]);
+      recordRestaurantMetricInDb(item.id, 'reservationClicks').catch(() => {});
+      Alert.alert(
+        confirmedReservation.status === 'confirmed' ? 'Reserva confirmada' : 'Reserva solicitada',
+        `${item.name} • ${draft.date} às ${draft.time}`
+      );
+      return true;
+    } catch (error) {
+      const unavailable = /SLOT_FULL|lotado|capacity/i.test(error?.message || '');
+      Alert.alert(
+        unavailable ? 'Horário indisponível' : 'Não foi possível reservar',
+        unavailable
+          ? 'Esse horário acabou de ficar lotado. Você pode entrar na lista de espera.'
+          : 'Confira sua conexão e tente novamente.'
+      );
+      return false;
+    }
   }
 
   function joinRestaurantWaitlist(item, draft) {
@@ -3455,6 +3533,18 @@ export default function App() {
   function updateReservationStatus(reservation, status) {
     const updated = { ...reservation, status, updatedAt: new Date().toISOString() };
     setReservations((items) => items.map((item) => item.id === reservation.id ? updated : item));
+    if (supabaseAuthEnabled) {
+      updateReservationStatusSecureInDb(reservation.id, status)
+        .then((remoteReservation) => {
+          if (!remoteReservation) return;
+          setReservations((items) => items.map((item) => item.id === reservation.id ? remoteReservation : item));
+        })
+        .catch(() => {
+          setReservations((items) => items.map((item) => item.id === reservation.id ? reservation : item));
+          Alert.alert('Reserva', 'Não foi possível atualizar o status agora.');
+        });
+      return;
+    }
     saveReservationToDb(updated).catch(() => {});
   }
 
@@ -7169,8 +7259,10 @@ function postKey(restaurantId, postId) {
         currentUser={currentUser}
         reservations={reservations}
         onClose={() => setReservationRestaurant(null)}
-        onReserve={(item, draft) => {
-          if (createNativeReservation(item, draft)) setReservationRestaurant(null);
+        onReserve={async (item, draft) => {
+          const created = await createNativeReservation(item, draft);
+          if (created) setReservationRestaurant(null);
+          return created;
         }}
         onWaitlist={(item, draft) => {
           if (joinRestaurantWaitlist(item, draft)) setReservationRestaurant(null);
@@ -7455,6 +7547,7 @@ function ReservationModal({ item, currentUser, reservations = [], onClose, onRes
   const settings = reservationSettingsFor(item || {});
   const dates = useMemo(() => nextReservationDates(settings.advanceDays, 7), [item?.id, settings.advanceDays]);
   const [draft, setDraft] = useState({ date: '', time: '', partySize: 2, phone: '', notes: '' });
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!item?.id) return;
@@ -7574,8 +7667,19 @@ function ReservationModal({ item, currentUser, reservations = [], onClose, onRes
             {canWaitlist ? (
               <AppButton onPress={() => onWaitlist(item, draft)}>Entrar na lista de espera</AppButton>
             ) : (
-              <AppButton disabled={!canReserve} onPress={() => onReserve(item, draft)}>
-                {settings.autoConfirm ? 'Confirmar reserva' : 'Solicitar reserva'}
+              <AppButton
+                disabled={!canReserve || submitting}
+                onPress={async () => {
+                  if (submitting) return;
+                  setSubmitting(true);
+                  try {
+                    await onReserve(item, draft);
+                  } finally {
+                    setSubmitting(false);
+                  }
+                }}
+              >
+                {submitting ? 'Confirmando...' : (settings.autoConfirm ? 'Confirmar reserva' : 'Solicitar reserva')}
               </AppButton>
             )}
             {!String(draft.phone || '').trim() ? <Text style={styles.reservationFooterHint}>Informe um telefone para continuar.</Text> : null}
