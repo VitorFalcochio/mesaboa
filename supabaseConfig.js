@@ -712,13 +712,22 @@ function normalizeAppNotification(row) {
 export async function fetchSocialStateFromDb(userId) {
   const client = requireClient();
   if (!client || !userId) return null;
-  const [{ data: followRows, error: followsError }, { data: notificationRows, error: notificationsError }] = await Promise.all([
+  const [
+    { data: followRows, error: followsError },
+    { count: followers, error: followersError },
+    { data: notificationRows, error: notificationsError }
+  ] = await Promise.all([
     client
       .from('social_follows')
       .select('*')
       .eq('follower_legacy_id', String(userId))
       .eq('active', true)
       .order('updated_at', { ascending: false }),
+    client
+      .from('social_follows')
+      .select('*', { count: 'exact', head: true })
+      .eq('target_legacy_id', String(userId))
+      .eq('active', true),
     client
       .from('app_notifications')
       .select('*')
@@ -727,6 +736,7 @@ export async function fetchSocialStateFromDb(userId) {
       .limit(60)
   ]);
   throwIfError(followsError);
+  throwIfError(followersError);
   throwIfError(notificationsError);
   return {
     followingProfiles: (followRows || []).map((row) => ({
@@ -734,6 +744,8 @@ export async function fetchSocialStateFromDb(userId) {
       id: row.target_legacy_id,
       followedAt: row.created_at
     })),
+    followers: Number(followers || 0),
+    following: (followRows || []).length,
     notifications: (notificationRows || []).map(normalizeAppNotification)
   };
 }
@@ -1103,17 +1115,8 @@ export async function saveReservationToDb(reservation) {
     if (!row) throw new Error('RESERVATION_NOT_CREATED');
     return normalizeReservationRow(row);
   }
-  await upsertByLegacyId('app_reservations', {
-    legacy_id: String(reservation.id),
-    restaurant_legacy_id: String(reservation.restaurantId),
-    user_legacy_id: String(reservation.userId),
-    reservation_date: reservation.date,
-    reservation_time: reservation.time,
-    party_size: Number(reservation.partySize || 1),
-    status: reservation.status || 'pending',
-    app_payload: cleanData(reservation),
-    updated_at: nowIso()
-  });
+  // Legacy/local mode intentionally stays on-device after backend hardening.
+  // Anonymous reservation writes are no longer sent to Supabase.
   return reservation;
 }
 

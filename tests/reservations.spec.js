@@ -37,8 +37,9 @@ test('creates a native reservation and shows it in the user account', async ({ p
 
   await page.getByLabel('Telefone para contato').fill('(17) 99999-9999');
   await page.getByRole('button', { name: 'Confirmar reserva', exact: true }).click();
-  await page.getByRole('tab', { name: 'Ir para Perfil' }).click();
-  await page.getByRole('button', { name: 'Abrir minhas reservas' }).click();
+  await expect(page.getByText('Reserva confirmada!', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Mascote Dine comemorando a reserva')).toBeVisible();
+  await page.getByRole('button', { name: 'Ver minhas reservas', exact: true }).click();
 
   await expect(page.getByText('Minhas reservas', { exact: true })).toBeVisible();
   await expect(page.getByText('Confirmada', { exact: true })).toBeVisible();
