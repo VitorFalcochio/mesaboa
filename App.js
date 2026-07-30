@@ -38,7 +38,9 @@ import {
   fetchPendingRestaurantsFromDb,
   fetchReviewsFromDb,
   fetchFeedDataFromDb,
+  fetchProfileSocialStatsFromDb,
   fetchRestaurantsFromDb,
+  fetchSocialStateFromDb,
   supabaseReady,
   addFeedCommentToDb,
   blockAccountInDb,
@@ -49,6 +51,7 @@ import {
   createRestaurantInDb,
   deleteUserAccountInDb,
   reportContentInDb,
+  createAppNotificationInDb,
   recordRestaurantMetricInDb,
   registerPushTokenInDb,
   saveFavoritesToDb,
@@ -62,7 +65,9 @@ import {
   updateRestaurantInDb,
   updateRestaurantStatusInDb,
   updateReviewInDb,
-  setFeedReactionInDb
+  setFeedReactionInDb,
+  setProfileFollowInDb,
+  markAppNotificationsReadInDb
 } from './supabaseConfig';
 import {
   areaOptions,
@@ -329,8 +334,20 @@ const storageKeys = {
   restaurantCoordinates: 'dineRestaurantCoordinatesRN',
   feedPosts: 'dineFeedPostsRN',
   feedReactions: 'dineFeedReactionsRN',
-  onboardingSeen: 'dineOnboardingSeenRN'
+  onboardingSeen: 'dineOnboardingSeenRN',
+  restaurantDraft: 'dineRestaurantDraftRN'
 };
+const restaurantCategoryOptions = ['Brasileira', 'Hamburgueria', 'Italiana', 'Japonesa', 'Pizzaria', 'Cafeteria', 'Bar', 'Doces'];
+const restaurantPriceOptions = ['$', '$$', '$$$', '$$$$'];
+const restaurantWeekDays = [
+  ['monday', 'Segunda'],
+  ['tuesday', 'Terça'],
+  ['wednesday', 'Quarta'],
+  ['thursday', 'Quinta'],
+  ['friday', 'Sexta'],
+  ['saturday', 'Sábado'],
+  ['sunday', 'Domingo']
+];
 const homeRestaurantSectionLimit = 15;
 const publicAppUrl = String(
   process.env.EXPO_PUBLIC_APP_URL
@@ -923,9 +940,18 @@ function restaurantToForm(item = {}) {
     coverPhoto: item.coverPhoto || item.image || '',
     menuPhoto: item.menuPhoto || '',
     menuText: (item.menuItems || []).map((dish) => `${dish.name} | ${dish.price || ''}`).join('\n'),
+    menuDraftItems: (item.menuItems || []).map((dish, index) => ({
+      id: dish.id || `menu-${index}`,
+      name: dish.name || '',
+      description: dish.description || '',
+      category: dish.category || '',
+      price: String(dish.price || '').replace('.', ','),
+      image: dish.image || ''
+    })),
     openingHoursText: item.openingHours
       ? Object.entries(item.openingHours).map(([day, hours]) => `${day}: ${hours}`).join('\n')
       : '',
+    openingHoursDraft: item.openingHours || {},
     holidayClosuresText: (item.holidayClosures || []).map((holiday) => `${holiday.date} | ${holiday.label || 'Feriado'}`).join('\n'),
     tagsText: (item.tags || []).join(', '),
     highlightsText: (item.highlights || []).join(', ')
@@ -1400,6 +1426,7 @@ export default function App() {
   const homeDiscoveryAnim = useRef(new Animated.Value(1)).current;
   const homeDiscoverySheen = useRef(new Animated.Value(0)).current;
   const homeDiscoveryScrollRef = useRef(null);
+  const mainScrollRef = useRef(null);
   const demoRestaurantSeededRef = useRef(false);
   const [fontsLoaded] = useFonts({
     Baloo2_800ExtraBold,
@@ -1419,6 +1446,10 @@ export default function App() {
   const [authError, setAuthError] = useState('');
   const [pendingAction, setPendingAction] = useState(null);
   const [form, setForm] = useState({});
+  const [registerStep, setRegisterStep] = useState(0);
+  const [registerErrors, setRegisterErrors] = useState({});
+  const [registerLocating, setRegisterLocating] = useState(false);
+  const [registerDraftSavedAt, setRegisterDraftSavedAt] = useState(null);
   const [hydrated, setHydrated] = useState(false);
   const [favoriteSegment, setFavoriteSegment] = useState('Salvos');
   const [selectedCollection, setSelectedCollection] = useState('Todas');
@@ -1450,6 +1481,12 @@ export default function App() {
   const [feedPhotoIndexes, setFeedPhotoIndexes] = useState({});
   const [feedMode, setFeedMode] = useState('Para você');
   const [customFeedPosts, setCustomFeedPosts] = useState([]);
+  const [activityNotifications, setActivityNotifications] = useState([]);
+  const [activityFilter, setActivityFilter] = useState('Todas');
+  const unreadActivityCount = useMemo(
+    () => activityNotifications.filter((item) => item.status === 'unread').length,
+    [activityNotifications]
+  );
   const [selectedFeedProfile, setSelectedFeedProfile] = useState(null);
   const [selectedFeedPost, setSelectedFeedPost] = useState(null);
   const [feedComposerOpen, setFeedComposerOpen] = useState(false);
@@ -1641,6 +1678,21 @@ export default function App() {
   }, [feedReactions, hydrated]);
 
   useEffect(() => {
+    if (!hydrated || activeScreen?.name !== 'restaurantRegister' || editingRestaurant || !currentUser) return undefined;
+    const hasDraftContent = Boolean(form.name || form.address || form.coverPhoto || form.phone || form.whatsapp);
+    if (!hasDraftContent) return undefined;
+    const timeout = setTimeout(() => {
+      AsyncStorage.setItem(storageKeys.restaurantDraft, JSON.stringify({
+        userId: currentUser.id,
+        form,
+        step: registerStep,
+        savedAt: new Date().toISOString()
+      })).then(() => setRegisterDraftSavedAt(Date.now())).catch(() => {});
+    }, 450);
+    return () => clearTimeout(timeout);
+  }, [activeScreen?.name, currentUser, editingRestaurant, form, hydrated, registerStep]);
+
+  useEffect(() => {
     if (!hydrated || !currentUser) return;
     fetchFavoritesFromDb(currentUser.id)
       .then((remoteFavorites) => {
@@ -1648,6 +1700,27 @@ export default function App() {
       })
       .catch(() => {});
   }, [currentUser, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated || !currentUser?.id) {
+      setActivityNotifications([]);
+      return;
+    }
+    fetchSocialStateFromDb(currentUser.id)
+      .then((socialState) => {
+        if (!socialState) return;
+        setActivityNotifications(socialState.notifications || []);
+        setCurrentUser((user) => user ? { ...user, followingProfiles: socialState.followingProfiles || user.followingProfiles || [] } : user);
+      })
+      .catch(() => {});
+  }, [currentUser?.id, hydrated]);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      mainScrollRef.current?.scrollTo({ y: 0, animated: false });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeScreen?.name, registerStep, tab]);
 
   useEffect(() => {
     if (!hydrated || !currentUser) {
@@ -1980,6 +2053,23 @@ export default function App() {
     if (['liked', 'saved', 'reposted'].includes(field)) {
       setFeedReactionInDb(postId, field, active, currentUser).catch(() => {});
     }
+    if (active && ['liked', 'reposted'].includes(field)) {
+      const post = feedPosts.find((item) => String(item.id) === String(postId));
+      const targetUserId = post?.authorId || post?.authorProfile?.id;
+      if (targetUserId && String(targetUserId) !== String(currentUser?.id)) {
+        createAppNotificationInDb({
+          userId: targetUserId,
+          actorId: currentUser.id,
+          actorName: currentUser.name || 'Alguém',
+          actorAvatar: currentUser.photo || '',
+          type: field === 'liked' ? 'like' : 'repost',
+          message: field === 'liked' ? 'curtiu sua publicação.' : 'republicou sua descoberta.',
+          targetId: postId,
+          targetPostId: postId,
+          previewImage: post.images?.[0] || post.image || ''
+        }).catch(() => {});
+      }
+    }
   }
 
   function addFeedComment(post) {
@@ -2007,6 +2097,20 @@ export default function App() {
     }));
     setFeedCommentDrafts((current) => ({ ...current, [post.id]: '' }));
     addFeedCommentToDb(post.id, comment, currentUser).catch(() => {});
+    const targetUserId = post.authorId || post.authorProfile?.id;
+    if (targetUserId && String(targetUserId) !== String(currentUser?.id)) {
+      createAppNotificationInDb({
+        userId: targetUserId,
+        actorId: currentUser.id,
+        actorName: currentUser.name || 'Alguém',
+        actorAvatar: currentUser.photo || '',
+        type: 'comment',
+        message: `comentou: “${text.slice(0, 80)}${text.length > 80 ? '…' : ''}”`,
+        targetId: post.id,
+        targetPostId: post.id,
+        previewImage: post.images?.[0] || post.image || ''
+      }).catch(() => {});
+    }
   }
 
   function shareFeedPost(post) {
@@ -2037,6 +2141,22 @@ export default function App() {
       posts: posts.length ? posts : [post]
     });
     navigateTo('feedProfile');
+    fetchProfileSocialStatsFromDb(profileKey)
+      .then((socialProfile) => {
+        if (!socialProfile) return;
+        setSelectedFeedProfile((current) => {
+          if (!current || String(current.id || current.handle || current.name) !== String(profileKey)) return current;
+          return {
+            ...current,
+            ...(socialProfile.profile || {}),
+            followers: socialProfile.followers,
+            following: socialProfile.following,
+            socialStatsLoaded: true,
+            posts: current.posts
+          };
+        });
+      })
+      .catch(() => {});
   }
 
   async function toggleFollowProfile(profile) {
@@ -2052,6 +2172,9 @@ export default function App() {
       ? following.filter((item) => String(item.id) !== profileId)
       : [{ id: profileId, name: profile?.name || 'Perfil', handle: profile?.handle || '', avatar: profile?.avatar || '', followedAt: new Date().toISOString() }, ...following];
     await updateCurrentUserProfile({ followingProfiles: nextFollowing });
+    setProfileFollowInDb(currentUser, { ...profile, id: profileId }, !isFollowing).catch(() => {
+      Alert.alert('Sincronização', 'A alteração ficou salva neste aparelho e será sincronizada quando o serviço estiver disponível.');
+    });
   }
 
   function openFeedComposer(user = currentUser) {
@@ -2268,8 +2391,38 @@ export default function App() {
     }
   }
 
-  function openNotifications() {
+  async function openNotifications() {
     navigateTo('notifications');
+    if (!currentUser?.id) return;
+    try {
+      const socialState = await fetchSocialStateFromDb(currentUser.id);
+      const notifications = socialState?.notifications || [];
+      setActivityNotifications(notifications);
+      const unreadIds = notifications.filter((item) => item.status === 'unread').map((item) => item.id);
+      if (unreadIds.length) {
+        setTimeout(() => {
+          setActivityNotifications((items) => items.map((item) => ({ ...item, status: 'read' })));
+          markAppNotificationsReadInDb(currentUser.id, unreadIds).catch(() => {});
+        }, 900);
+      }
+    } catch (error) {
+      // Keep the locally available activity if the social tables are offline.
+    }
+  }
+
+  function openActivityNotification(notification) {
+    const targetPostId = notification.targetPostId || (['like', 'comment', 'repost'].includes(notification.type) ? notification.targetId : '');
+    if (targetPostId) {
+      const post = feedPosts.find((item) => String(item.id) === String(targetPostId));
+      if (post) {
+        openFeedPost(post);
+        return;
+      }
+    }
+    if (notification.targetProfile) {
+      setSelectedFeedProfile({ ...notification.targetProfile, posts: [] });
+      navigateTo('feedProfile');
+    }
   }
 
   function openLocationPicker() {
@@ -2649,6 +2802,30 @@ export default function App() {
     });
   }
 
+  async function pickRestaurantMenuItemImage(index) {
+    const granted = await requestGalleryPermission('Permita acesso à galeria para escolher a foto do prato.');
+    if (!granted) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.84
+    });
+    if (result.canceled) return;
+    const localUri = result.assets?.[0]?.uri;
+    if (!localUri) return;
+    const restaurantAssetId = editingRestaurant?.id || form.id || `draft-${currentUser?.id || 'visitor'}`;
+    const uri = await withImageUploadFallback(localUri, (assetUri) => (
+      uploadRestaurantAsset(currentUser || { id: 'visitor' }, restaurantAssetId, `menu-${index}`, assetUri)
+    ));
+    setForm((current) => ({
+      ...current,
+      menuDraftItems: (current.menuDraftItems || []).map((item, itemIndex) => (
+        itemIndex === index ? { ...item, image: uri } : item
+      ))
+    }));
+  }
+
   function toggleProfilePreference(preference) {
     const currentPreferences = String(profileDraft.preferences || '')
       .split(',')
@@ -2779,8 +2956,22 @@ export default function App() {
   }
 
   function submitRestaurant() {
-    if (!form.name || !form.type || !form.district) {
-      Alert.alert('Restaurante', 'Nome, tipo de comida e bairro são obrigatórios.');
+    const contact = String(form.whatsapp || form.phone || '').trim();
+    const hoursDraft = form.openingHoursDraft || {};
+    const hasOpeningHours = Object.values(hoursDraft).some(Boolean) || Boolean(String(form.openingHoursText || '').trim());
+    if (!form.name || !form.type || !form.district || !form.description || !form.address || !contact || !(form.coverPhoto || form.image) || !hasOpeningHours || !parseOptionalCoordinate(form.latitude) || !parseOptionalCoordinate(form.longitude)) {
+      Alert.alert('Cadastro incompleto', 'Revise identidade, endereço confirmado, contato, foto de capa e horários antes de enviar.');
+      return;
+    }
+    const duplicate = restaurants.find((restaurant) => (
+      restaurant.id !== form.id
+      && (
+        (normalize(restaurant.name) === normalize(form.name) && normalize(restaurant.address) === normalize(form.address))
+        || (contact && [restaurant.phone, restaurant.whatsapp].some((value) => String(value || '').replace(/\D/g, '') === contact.replace(/\D/g, '')))
+      )
+    ));
+    if (duplicate) {
+      Alert.alert('Possível cadastro duplicado', `${duplicate.name} já possui nome/endereço ou contato semelhante. Procure o perfil existente para reivindicá-lo.`);
       return;
     }
     const assignedOwnerEmail = String(form.ownerEmail || '').trim();
@@ -2824,8 +3015,15 @@ export default function App() {
       coverPhoto,
       menuPhoto: form.menuPhoto || '',
       photos,
-      menuItems: parseMenuItems(form.menuText),
-      openingHours: parseOpeningHours(form.openingHoursText),
+      menuItems: (form.menuDraftItems || []).some((dish) => String(dish.name || '').trim())
+        ? form.menuDraftItems.filter((dish) => String(dish.name || '').trim()).map((dish, index) => ({
+          ...dish,
+          id: dish.id || `${Date.now()}-${index}`,
+          name: String(dish.name).trim(),
+          price: Number(String(dish.price || '').replace(',', '.')) || 0
+        }))
+        : parseMenuItems(form.menuText),
+      openingHours: Object.values(hoursDraft).some(Boolean) ? hoursDraft : parseOpeningHours(form.openingHoursText),
       holidayClosures: parseHolidayClosures(form.holidayClosuresText),
       tags: parseList(form.tagsText),
       highlights: parseList(form.highlightsText),
@@ -2855,6 +3053,9 @@ export default function App() {
     });
     setEditingRestaurant(null);
     setForm({});
+    setRegisterStep(0);
+    setRegisterErrors({});
+    AsyncStorage.removeItem(storageKeys.restaurantDraft).catch(() => {});
     setTab('Perfil');
     setActiveScreen(isAdmin ? { name: 'restaurantPanel', params: {} } : null);
     Alert.alert('Restaurante salvo', isAdmin ? `${item.name} já está no painel para gerenciamento.` : `${item.name} foi enviado para aprovação.`);
@@ -2923,18 +3124,136 @@ export default function App() {
   function editRestaurant(item) {
     setEditingRestaurant(item);
     setForm(restaurantToForm(item));
+    setRegisterStep(0);
+    setRegisterErrors({});
     navigateTo('restaurantRegister');
   }
 
-  function startRestaurantRegistration(defaults = {}) {
+  async function startRestaurantRegistration(defaults = {}) {
     setEditingRestaurant(null);
+    let savedDraft = null;
+    if (!Object.keys(defaults).length && currentUser) {
+      try {
+        const storedDraft = JSON.parse(await AsyncStorage.getItem(storageKeys.restaurantDraft) || 'null');
+        if (storedDraft?.userId === currentUser.id) savedDraft = storedDraft;
+      } catch (error) {
+        savedDraft = null;
+      }
+    }
     setForm({
       status: isAdmin ? 'published' : 'pending',
       adminManaged: Boolean(isAdmin),
       managedByAdminEmail: isAdmin ? currentUser?.email : '',
+      price: '$$',
+      menuDraftItems: [],
+      openingHoursDraft: {},
+      ...(savedDraft?.form || {}),
       ...defaults
     });
+    setRegisterStep(Math.max(0, Math.min(3, Number(savedDraft?.step || 0))));
+    setRegisterErrors({});
+    setRegisterDraftSavedAt(savedDraft?.savedAt ? new Date(savedDraft.savedAt).getTime() : null);
     navigateTo('restaurantRegister');
+  }
+
+  function validateRestaurantStep(step) {
+    const errors = {};
+    if (step === 0) {
+      if (!String(form.name || '').trim()) errors.name = 'Informe o nome do estabelecimento.';
+      if (!String(form.type || '').trim()) errors.type = 'Escolha uma categoria.';
+      if (!String(form.district || '').trim()) errors.district = 'Informe o bairro.';
+      if (!String(form.description || '').trim()) errors.description = 'Conte brevemente o que torna o lugar especial.';
+    }
+    if (step === 1) {
+      if (!String(form.address || '').trim()) errors.address = 'Informe o endereço completo.';
+      if (!String(form.whatsapp || form.phone || '').trim()) errors.contact = 'Informe WhatsApp ou telefone.';
+    }
+    if (step === 2 && !(form.coverPhoto || form.image)) {
+      errors.coverPhoto = 'Adicione uma foto de capa para apresentar o restaurante.';
+    }
+    if (step === 3) {
+      const informedHours = Object.values(form.openingHoursDraft || {}).filter(Boolean);
+      if (!informedHours.length && !String(form.openingHoursText || '').trim()) {
+        errors.openingHours = 'Informe o funcionamento de pelo menos um dia.';
+      } else if (informedHours.some((hours) => !parseHoursRanges(hours).length)) {
+        errors.openingHours = 'Use horários no formato 09:00-18:00.';
+      }
+    }
+    setRegisterErrors(errors);
+    return !Object.keys(errors).length;
+  }
+
+  async function locateRestaurantAddress(showResult = true) {
+    if (!String(form.address || '').trim()) {
+      setRegisterErrors((current) => ({ ...current, address: 'Digite o endereço antes de localizar no mapa.' }));
+      return false;
+    }
+    setRegisterLocating(true);
+    const coordinate = await geocodeRestaurantCoordinate(form);
+    setRegisterLocating(false);
+    if (!coordinate) {
+      setRegisterErrors((current) => ({ ...current, address: 'Não encontramos esse endereço. Inclua número, bairro e cidade.' }));
+      if (showResult) Alert.alert('Endereço não encontrado', 'Confira rua, número, bairro e cidade antes de tentar novamente.');
+      return false;
+    }
+    setForm((current) => ({
+      ...current,
+      latitude: String(coordinate.latitude),
+      longitude: String(coordinate.longitude)
+    }));
+    setRegisterErrors((current) => ({ ...current, address: '' }));
+    if (showResult) Alert.alert('Localização confirmada', 'O pin do restaurante foi posicionado no mapa.');
+    return true;
+  }
+
+  async function advanceRestaurantRegistration() {
+    if (!validateRestaurantStep(registerStep)) return;
+    if (registerStep === 1 && (!parseOptionalCoordinate(form.latitude) || !parseOptionalCoordinate(form.longitude))) {
+      const located = await locateRestaurantAddress(false);
+      if (!located) return;
+    }
+    setRegisterStep((step) => Math.min(3, step + 1));
+    setRegisterErrors({});
+  }
+
+  async function finishRestaurantRegistration() {
+    for (let step = 0; step < 4; step += 1) {
+      if (!validateRestaurantStep(step)) {
+        setRegisterStep(step);
+        return;
+      }
+    }
+    if (!parseOptionalCoordinate(form.latitude) || !parseOptionalCoordinate(form.longitude)) {
+      setRegisterStep(1);
+      const located = await locateRestaurantAddress(true);
+      if (!located) return;
+      return;
+    }
+    submitRestaurant();
+  }
+
+  function updateMenuDraftItem(index, field, value) {
+    setForm((current) => ({
+      ...current,
+      menuDraftItems: (current.menuDraftItems || []).map((item, itemIndex) => (
+        itemIndex === index ? { ...item, [field]: value } : item
+      ))
+    }));
+  }
+
+  function setRestaurantFormField(field, value, errorField = field) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setRegisterErrors((current) => ({ ...current, [errorField]: '' }));
+  }
+
+  function addMenuDraftItem() {
+    setForm((current) => ({
+      ...current,
+      menuDraftItems: [
+        ...(current.menuDraftItems || []),
+        { id: `draft-menu-${Date.now()}`, name: '', description: '', category: '', price: '', image: '' }
+      ]
+    }));
   }
 
   function changeRestaurantStatus(item, status) {
@@ -3152,7 +3471,7 @@ function postKey(restaurantId, postId) {
           <View style={styles.discoveryTopActions}>
             <Pressable accessibilityRole="button" accessibilityLabel="Abrir notificações" hitSlop={8} onPress={openNotifications} style={({ pressed }) => [styles.discoveryIconButton, pressed && styles.activePress]}>
               <Ionicons name="notifications-outline" size={24} color={colors.ink} />
-              <View style={styles.discoveryNotificationDot} />
+              {unreadActivityCount ? <View style={styles.discoveryNotificationDot} /> : null}
             </Pressable>
             <Pressable onPress={() => setTab('Perfil')} style={styles.discoveryAvatar}>
               {currentUser?.photo ? <Image source={imageSource(currentUser.photo)} style={styles.discoveryAvatarImage} /> : <Text style={styles.discoveryAvatarText}>{(currentUser?.name || 'D').slice(0, 1).toUpperCase()}</Text>}
@@ -3542,7 +3861,7 @@ function postKey(restaurantId, postId) {
             <BrandLogo />
             <Pressable onPress={openNotifications} style={styles.discoveryIconButton}>
               <Ionicons name="notifications-outline" size={24} color={colors.ink} />
-              <View style={styles.discoveryNotificationDot} />
+              {unreadActivityCount ? <View style={styles.discoveryNotificationDot} /> : null}
             </Pressable>
           </View>
           <Text style={styles.socialFeedTitle}>Feed</Text>
@@ -3890,7 +4209,7 @@ function postKey(restaurantId, postId) {
               <Ionicons name="notifications-outline" size={26} color={colors.ink} />
               <View style={styles.dineProfileBellDot} />
             </Pressable>
-            <Pressable onPress={() => navigateTo('settings')} style={styles.dineProfileTopButton}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Abrir configurações" onPress={() => navigateTo('settings')} style={styles.dineProfileTopButton}>
               <Ionicons name="settings-outline" size={26} color={colors.ink} />
             </Pressable>
           </View>
@@ -4080,7 +4399,7 @@ function postKey(restaurantId, postId) {
               <Ionicons name="notifications-outline" size={26} color={colors.ink} />
               <View style={styles.dineProfileBellDot} />
             </Pressable>
-            <Pressable onPress={() => navigateTo('settings')} style={styles.dineProfileTopButton}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Abrir configurações" onPress={() => navigateTo('settings')} style={styles.dineProfileTopButton}>
               <Ionicons name="settings-outline" size={26} color={colors.ink} />
             </Pressable>
           </View>
@@ -4501,34 +4820,73 @@ function postKey(restaurantId, postId) {
       ['people-outline', 'Convites', 'Amigos entrando pelo seu link.', 'invites'],
       ['gift-outline', 'Ofertas Dine+', 'Beneficios, eventos e experiencias.', 'offers']
     ];
-    const activityItems = feedPosts.slice(0, 6);
+    const socialTypes = new Set(['follow', 'like', 'comment', 'repost']);
+    const placeTypes = new Set(['restaurant', 'restaurant-update', 'offer']);
+    const activityItems = activityNotifications.filter((item) => (
+      activityFilter === 'Todas'
+      || (activityFilter === 'Social' && socialTypes.has(item.type))
+      || (activityFilter === 'Lugares' && placeTypes.has(item.type))
+    ));
+    const notificationIcons = {
+      follow: 'person-add-outline',
+      like: 'heart',
+      comment: 'chatbubble-outline',
+      repost: 'repeat',
+      restaurant: 'restaurant-outline',
+      'restaurant-update': 'sparkles-outline',
+      offer: 'gift-outline'
+    };
     return (
       <View style={styles.activityPage}>
         {renderScreenHeader('Atividade')}
         <View style={styles.activityTabs}>
-          {['Todas', 'Social', 'Lugares'].map((label, index) => (
-            <View key={label} style={[styles.activityTab, index === 0 && styles.activityTabActive]}>
-              <Text style={[styles.activityTabText, index === 0 && styles.activityTabTextActive]}>{label}</Text>
-            </View>
+          {['Todas', 'Social', 'Lugares'].map((label) => (
+            <Pressable
+              accessibilityRole="tab"
+              accessibilityState={{ selected: activityFilter === label }}
+              key={label}
+              onPress={() => setActivityFilter(label)}
+              style={[styles.activityTab, activityFilter === label && styles.activityTabActive]}
+            >
+              <Text style={[styles.activityTabText, activityFilter === label && styles.activityTabTextActive]}>{label}</Text>
+            </Pressable>
           ))}
         </View>
-        <Text style={styles.activityGroupTitle}>Hoje</Text>
+        <Text style={styles.activityGroupTitle}>Recentes</Text>
         <View style={styles.activityList}>
-          {activityItems.length ? activityItems.map((post, index) => (
-            <Pressable key={post.id} onPress={() => openFeedPost(post)} style={styles.activityItem}>
+          {activityItems.length ? activityItems.map((notification) => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Abrir atividade de ${notification.actorName || 'Dine'}`}
+              key={notification.id}
+              onPress={() => openActivityNotification(notification)}
+              style={styles.activityItem}
+            >
               <View style={styles.activityAvatar}>
-                {post.avatar ? <Image source={imageSource(post.avatar)} style={styles.activityAvatarImage} /> : <Text style={styles.activityAvatarText}>{String(post.author || 'D').slice(0, 1).toUpperCase()}</Text>}
+                {notification.actorAvatar ? (
+                  <Image source={imageSource(notification.actorAvatar)} style={styles.activityAvatarImage} />
+                ) : (
+                  <>
+                    <Text style={styles.activityAvatarText}>{String(notification.actorName || 'D').slice(0, 1).toUpperCase()}</Text>
+                    <View style={styles.activityTypeBadge}>
+                      <Ionicons name={notificationIcons[notification.type] || 'notifications-outline'} size={11} color={colors.card} />
+                    </View>
+                  </>
+                )}
               </View>
               <View style={styles.activityCopy}>
-                <Text style={styles.activityText}><Text style={styles.activityAuthor}>{post.author || 'Dine'} </Text>{index % 2 ? 'publicou uma nova descoberta.' : 'marcou um lugar que pode interessar você.'}</Text>
-                <Text style={styles.activityTime}>{formatPostDate(post.createdAt)}</Text>
+                <Text style={styles.activityText}><Text style={styles.activityAuthor}>{notification.actorName || 'Dine'} </Text>{notification.message || 'enviou uma novidade para você.'}</Text>
+                <Text style={styles.activityTime}>{formatPostDate(notification.createdAt)}</Text>
               </View>
-              <Image source={imageSource(post.images?.[0] || post.image)} style={styles.activityThumb} />
-              {index < 3 ? <View style={styles.activityUnread} /> : null}
+              {notification.previewImage ? <Image source={imageSource(notification.previewImage)} style={styles.activityThumb} /> : <Ionicons name="chevron-forward" size={18} color={colors.muted} />}
+              {notification.status === 'unread' ? <View style={styles.activityUnread} /> : null}
             </Pressable>
           )) : (
             <View style={styles.activityEmpty}>
-              <Text style={styles.activityEmptyText}>As novidades da sua comunidade aparecerão aqui.</Text>
+              <Ionicons name={activityFilter === 'Lugares' ? 'restaurant-outline' : 'notifications-outline'} size={26} color={colors.redDark} />
+              <Text style={styles.activityEmptyText}>
+                {activityFilter === 'Todas' ? 'Curtidas, comentários e novos seguidores aparecerão aqui.' : `Nenhuma atividade em ${activityFilter.toLowerCase()} ainda.`}
+              </Text>
             </View>
           )}
         </View>
@@ -5079,8 +5437,11 @@ function postKey(restaurantId, postId) {
     const following = currentUser?.followingProfiles || [];
     const profileId = String(profile.id || profile.handle || profile.name || '');
     const isFollowing = following.some((item) => String(item.id) === profileId);
+    const isOwnProfile = Boolean(currentUser?.id && String(currentUser.id) === profileId);
     const totalLikes = posts.reduce((sum, post) => sum + Number(post.likes || 0), 0);
-    const followers = Math.max(0, Number(profile.followers || totalLikes + 120) + (isFollowing ? 1 : 0));
+    const followers = profile.socialStatsLoaded
+      ? Math.max(0, Number(profile.followers || 0))
+      : Math.max(0, Number(profile.followers || totalLikes + 120) + (isFollowing ? 1 : 0));
     const instagram = String(profile.instagram || '').trim();
     const profileAvatar = String(profile.avatar || '').trim();
     const profileInitials = initialsForName(profile.name, 'D');
@@ -5092,7 +5453,7 @@ function postKey(restaurantId, postId) {
     return (
       <View style={styles.feedProfilePage}>
         <View style={styles.feedProfileTopBar}>
-          <Pressable onPress={goBack} style={styles.feedProfileIconButton}>
+          <Pressable accessibilityRole="button" accessibilityLabel="Voltar ao feed" onPress={goBack} style={styles.feedProfileIconButton}>
             <Ionicons name="chevron-back" size={24} color={colors.ink} />
           </Pressable>
           <Text style={styles.feedProfileHandle} numberOfLines={1}>{profile.handle || '@perfil'}</Text>
@@ -5127,9 +5488,11 @@ function postKey(restaurantId, postId) {
           {instagram ? <Text style={styles.feedProfileInstagram}>{instagram.startsWith('@') ? instagram : `@${instagram.replace(/^https?:\/\/(www\.)?instagram\.com\//, '').replace('/', '')}`}</Text> : null}
         </View>
         <View style={styles.feedProfileActions}>
-          <Pressable onPress={() => toggleFollowProfile(profile)} style={[styles.feedProfileFollowButton, isFollowing && styles.feedProfileFollowingButton]}>
-            <Text style={[styles.feedProfileFollowText, isFollowing && styles.feedProfileFollowingText]}>{isFollowing ? 'Seguindo' : 'Seguir'}</Text>
-          </Pressable>
+          {!isOwnProfile ? (
+            <Pressable accessibilityRole="button" accessibilityLabel={isFollowing ? `Deixar de seguir ${profile.name}` : `Seguir ${profile.name}`} onPress={() => toggleFollowProfile(profile)} style={[styles.feedProfileFollowButton, isFollowing && styles.feedProfileFollowingButton]}>
+              <Text style={[styles.feedProfileFollowText, isFollowing && styles.feedProfileFollowingText]}>{isFollowing ? 'Seguindo' : 'Seguir'}</Text>
+            </Pressable>
+          ) : null}
           {instagram ? (
             <Pressable onPress={() => Linking.openURL(instagramUrl).catch(() => {})} style={styles.feedProfileInstagramButton}>
               <Ionicons name="logo-instagram" size={17} color={colors.ink} />
@@ -5535,121 +5898,338 @@ function postKey(restaurantId, postId) {
   }
 
   function renderRestaurantRegisterScreen() {
+    const steps = [
+      ['Essencial', 'storefront-outline'],
+      ['Localização', 'location-outline'],
+      ['Cardápio', 'images-outline'],
+      ['Revisão', 'checkmark-circle-outline']
+    ];
+    const menuDraftItems = form.menuDraftItems || [];
+    const openingHoursDraft = form.openingHoursDraft || {};
+    const completedDays = Object.values(openingHoursDraft).filter(Boolean).length;
+    const draftStatus = registerDraftSavedAt ? 'Rascunho salvo automaticamente' : 'Suas alterações serão salvas neste aparelho';
+
     return (
-      <View>
+      <View style={styles.registerPage}>
         {renderScreenHeader(editingRestaurant ? 'Editar restaurante' : 'Cadastrar restaurante', 'Conte sua proposta em etapas rápidas.')}
-        <View style={styles.registerHero}>
-          <Ionicons name="restaurant-outline" size={28} color={colors.redDark} />
-          <View style={styles.registerHeroCopy}>
-            <Text style={styles.panelTitle}>Perfil do estabelecimento</Text>
-            <Text style={styles.panelText}>Preencha o essencial primeiro; depois inclua fotos, cardápio e horários para deixar a página viva.</Text>
+
+        <View style={styles.registerProgress}>
+          <View style={styles.registerProgressTop}>
+            <Text style={styles.registerProgressTitle}>Etapa {registerStep + 1} de {steps.length}</Text>
+            {!editingRestaurant ? (
+              <View style={styles.registerDraftStatus}>
+                <Ionicons name="cloud-done-outline" size={14} color={colors.green} />
+                <Text style={styles.registerDraftStatusText}>{draftStatus}</Text>
+              </View>
+            ) : null}
+          </View>
+          <View style={styles.registerProgressTrack}>
+            <View style={[styles.registerProgressFill, { width: `${((registerStep + 1) / steps.length) * 100}%` }]} />
+          </View>
+          <View style={styles.registerStepRow}>
+            {steps.map(([label, icon], index) => (
+              <View key={label} style={styles.registerStepItem}>
+                <View style={[styles.registerStepIcon, index <= registerStep && styles.registerStepIconActive]}>
+                  <Ionicons name={index < registerStep ? 'checkmark' : icon} size={16} color={index <= registerStep ? colors.card : colors.muted} />
+                </View>
+                <Text numberOfLines={1} style={[styles.registerStepLabel, index === registerStep && styles.registerStepLabelActive]}>{label}</Text>
+              </View>
+            ))}
           </View>
         </View>
-        {isAdmin ? (
-          <View style={styles.registerSection}>
-            <View style={styles.registerSectionHeader}>
-              <Ionicons name="briefcase-outline" size={20} color={colors.redDark} />
-              <Text style={styles.registerSectionTitle}>Responsável da empresa</Text>
+
+        {registerStep === 0 ? (
+          <>
+            <View style={styles.registerHero}>
+              <Ionicons name="storefront-outline" size={26} color={colors.redDark} />
+              <View style={styles.registerHeroCopy}>
+                <Text style={styles.panelTitle}>Comece pelo essencial</Text>
+                <Text style={styles.panelText}>Essas informações aparecem na busca, no mapa e no perfil do restaurante.</Text>
+              </View>
             </View>
-            <Field label="Nome do responsável" value={form.ownerName || ''} onChangeText={(value) => setForm({ ...form, ownerName: value })} placeholder="Nome do cliente ou empresa" />
-            <Field label="E-mail do responsável" value={form.ownerEmail || ''} onChangeText={(value) => setForm({ ...form, ownerEmail: value, ownerId: ownerIdFromEmail(value) })} placeholder="cliente@empresa.com" keyboardType="email-address" autoCapitalize="none" />
-            <Field label="ID interno do responsável" value={form.ownerId || ''} onChangeText={(value) => setForm({ ...form, ownerId: value })} placeholder="Gerado pelo e-mail, se vazio" autoCapitalize="none" />
-            <Field label="Status do perfil" value={form.status || 'published'} onChangeText={(value) => setForm({ ...form, status: value })} placeholder="published, pending, paused, archived" autoCapitalize="none" />
-            <Field label="Notas de suporte" value={form.ownerSupportNotes || ''} onChangeText={(value) => setForm({ ...form, ownerSupportNotes: value })} placeholder="Ex.: cadastrar por WhatsApp, cliente pediu ajuda com fotos" multiline />
-            <Pressable
-              onPress={() => setForm((current) => ({ ...current, adminManaged: current.adminManaged === false }))}
-              style={({ pressed }) => [styles.settingsRow, pressed && styles.activePress]}
-            >
-              <View style={[styles.optionRadio, form.adminManaged !== false && styles.optionRadioActive]}>
-                {form.adminManaged !== false ? <Ionicons name="checkmark" size={15} color={colors.card} /> : null}
+            {isAdmin ? (
+              <View style={styles.registerSection}>
+                <View style={styles.registerSectionHeader}>
+                  <Ionicons name="briefcase-outline" size={20} color={colors.redDark} />
+                  <Text style={styles.registerSectionTitle}>Responsável da empresa</Text>
+                </View>
+                <Field label="Nome do responsável" value={form.ownerName || ''} onChangeText={(value) => setRestaurantFormField('ownerName', value)} placeholder="Nome do cliente ou empresa" />
+                <Field label="E-mail do responsável" value={form.ownerEmail || ''} onChangeText={(value) => setForm((current) => ({ ...current, ownerEmail: value, ownerId: ownerIdFromEmail(value) }))} placeholder="cliente@empresa.com" keyboardType="email-address" autoCapitalize="none" />
+                <Text style={styles.registerFieldLabel}>Status inicial</Text>
+                <View style={styles.registerChoiceRow}>
+                  {['published', 'pending', 'paused'].map((status) => (
+                    <Pressable key={status} onPress={() => setRestaurantFormField('status', status)} style={[styles.registerChoice, form.status === status && styles.registerChoiceActive]}>
+                      <Text style={[styles.registerChoiceText, form.status === status && styles.registerChoiceTextActive]}>
+                        {{ published: 'Publicado', pending: 'Pendente', paused: 'Pausado' }[status]}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Field label="Notas de suporte" value={form.ownerSupportNotes || ''} onChangeText={(value) => setRestaurantFormField('ownerSupportNotes', value)} placeholder="Ex.: cliente pediu ajuda com as fotos" multiline />
               </View>
-              <View style={styles.settingsRowCopy}>
-                <Text style={styles.settingsRowTitle}>Gerenciado pelo Dine</Text>
-                <Text style={styles.settingsRowSubtitle}>Mantém o admin com permissão operacional para editar e dar suporte.</Text>
+            ) : null}
+            <View style={styles.registerSection}>
+              <View style={styles.registerSectionHeader}>
+                <Ionicons name="restaurant-outline" size={20} color={colors.redDark} />
+                <Text style={styles.registerSectionTitle}>Identidade</Text>
               </View>
-            </Pressable>
-          </View>
+              <Field label="Nome do estabelecimento" value={form.name || ''} error={registerErrors.name} onChangeText={(value) => setRestaurantFormField('name', value)} placeholder="Ex.: Casa Nostra" />
+              <Text style={styles.registerFieldLabel}>Categoria principal</Text>
+              <View style={styles.registerChoiceWrap}>
+                {restaurantCategoryOptions.map((category) => (
+                  <Pressable key={category} onPress={() => setRestaurantFormField('type', category)} style={[styles.registerChoice, form.type === category && styles.registerChoiceActive]}>
+                    <Text style={[styles.registerChoiceText, form.type === category && styles.registerChoiceTextActive]}>{category}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              {registerErrors.type ? <Text style={styles.fieldErrorText}>{registerErrors.type}</Text> : null}
+              <Text style={styles.registerFieldLabel}>Faixa de preço</Text>
+              <View style={styles.registerChoiceRow}>
+                {restaurantPriceOptions.map((price) => (
+                  <Pressable key={price} onPress={() => setRestaurantFormField('price', price)} style={[styles.registerChoice, form.price === price && styles.registerChoiceActive]}>
+                    <Text style={[styles.registerChoiceText, form.price === price && styles.registerChoiceTextActive]}>{price}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Field label="Bairro" value={form.district || ''} error={registerErrors.district} onChangeText={(value) => setRestaurantFormField('district', value)} placeholder="Ex.: Redentora" />
+              <Field label="Descrição" value={form.description || ''} error={registerErrors.description} onChangeText={(value) => setRestaurantFormField('description', value)} placeholder="Ambiente, especialidades e proposta do lugar" multiline />
+            </View>
+          </>
         ) : null}
-        <View style={styles.registerSection}>
-          <View style={styles.registerSectionHeader}>
-            <Ionicons name="storefront-outline" size={20} color={colors.redDark} />
-            <Text style={styles.registerSectionTitle}>Identidade</Text>
-          </View>
-          <Field label="Nome" value={form.name} onChangeText={(value) => setForm({ ...form, name: value })} />
-          <Field label="Tipo de comida" value={form.type} onChangeText={(value) => setForm({ ...form, type: value })} />
-          <Field label="Bairro" value={form.district} onChangeText={(value) => setForm({ ...form, district: value })} />
-          <Field label="Faixa de preço" value={form.price} onChangeText={(value) => setForm({ ...form, price: value })} placeholder="$$" />
-          <Field label="Descrição" value={form.description} onChangeText={(value) => setForm({ ...form, description: value })} multiline />
-        </View>
-        <View style={styles.registerSection}>
-          <View style={styles.registerSectionHeader}>
-            <Ionicons name="location-outline" size={20} color={colors.redDark} />
-            <Text style={styles.registerSectionTitle}>Local e contato</Text>
-          </View>
-          <Field label="Endereço" value={form.address} onChangeText={(value) => setForm({ ...form, address: value })} />
-          <Field label="Latitude" value={form.latitude} onChangeText={(value) => setForm({ ...form, latitude: value })} placeholder="-20.8126" keyboardType="numeric" />
-          <Field label="Longitude" value={form.longitude} onChangeText={(value) => setForm({ ...form, longitude: value })} placeholder="-49.3768" keyboardType="numeric" />
-          <Field label="Telefone" value={form.phone} onChangeText={(value) => setForm({ ...form, phone: value })} keyboardType="phone-pad" />
-          <Field label="WhatsApp" value={form.whatsapp} onChangeText={(value) => setForm({ ...form, whatsapp: value })} keyboardType="phone-pad" />
-          <Field label="Instagram" value={form.instagram} onChangeText={(value) => setForm({ ...form, instagram: value })} placeholder="https://instagram.com/..." />
-          <Field label="Link de reserva" value={form.reservationUrl} onChangeText={(value) => setForm({ ...form, reservationUrl: value })} placeholder="https://..." />
-        </View>
-        <View style={styles.registerSection}>
-          <View style={styles.registerSectionHeader}>
-            <Ionicons name="images-outline" size={20} color={colors.redDark} />
-            <Text style={styles.registerSectionTitle}>Fotos e cardápio</Text>
-          </View>
-          <View style={styles.registerPhotoGrid}>
-            <Pressable onPress={() => pickRestaurantImage('coverPhoto')} style={({ pressed }) => [styles.registerPhotoCard, pressed && styles.activePress]}>
-              {(form.coverPhoto || form.image) ? <Image source={imageSource(form.coverPhoto || form.image)} style={styles.registerPhotoPreview} /> : <Ionicons name="image-outline" size={28} color={colors.redDark} />}
-              <Text style={styles.registerPhotoTitle}>Foto de capa</Text>
-              <Text style={styles.registerPhotoText}>{(form.coverPhoto || form.image) ? 'Trocar foto' : 'Escolher da galeria'}</Text>
-            </Pressable>
-            <Pressable onPress={() => pickRestaurantImage('logo')} style={({ pressed }) => [styles.registerPhotoCard, pressed && styles.activePress]}>
-              {form.logo ? <Image source={imageSource(form.logo)} style={styles.registerPhotoPreview} /> : <Ionicons name="storefront-outline" size={28} color={colors.redDark} />}
-              <Text style={styles.registerPhotoTitle}>Logo</Text>
-              <Text style={styles.registerPhotoText}>{form.logo ? 'Trocar logo' : 'Escolher da galeria'}</Text>
-            </Pressable>
-            <Pressable onPress={() => pickRestaurantImage('menuPhoto')} style={({ pressed }) => [styles.registerPhotoCard, pressed && styles.activePress]}>
-              {form.menuPhoto ? <Image source={imageSource(form.menuPhoto)} style={styles.registerPhotoPreview} /> : <Ionicons name="reader-outline" size={28} color={colors.redDark} />}
-              <Text style={styles.registerPhotoTitle}>Foto do cardápio</Text>
-              <Text style={styles.registerPhotoText}>{form.menuPhoto ? 'Trocar foto' : 'Escolher da galeria'}</Text>
-            </Pressable>
-            <Pressable onPress={pickRestaurantExtraPhotos} style={({ pressed }) => [styles.registerPhotoCard, pressed && styles.activePress]}>
-              <Ionicons name="images-outline" size={28} color={colors.redDark} />
-              <Text style={styles.registerPhotoTitle}>Fotos extras</Text>
-              <Text style={styles.registerPhotoText}>{parseList(form.photosText).length} selecionadas</Text>
-            </Pressable>
-          </View>
-          {parseList(form.photosText).length ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.registerExtraPhotoRow}>
-              {parseList(form.photosText).map((photo, index) => (
-                <View key={`${photo}-${index}`} style={styles.registerExtraPhotoWrap}>
-                  <Image source={imageSource(photo)} style={styles.registerExtraPhoto} />
-                  <Pressable
-                    onPress={() => setForm((current) => ({ ...current, photosText: parseList(current.photosText).filter((_, photoIndex) => photoIndex !== index).join('\n') }))}
-                    style={styles.registerExtraPhotoRemove}
-                  >
-                    <Ionicons name="close" size={14} color={colors.card} />
+
+        {registerStep === 1 ? (
+          <>
+            <View style={styles.registerHero}>
+              <Ionicons name="location-outline" size={26} color={colors.redDark} />
+              <View style={styles.registerHeroCopy}>
+                <Text style={styles.panelTitle}>Onde fica e como falar</Text>
+                <Text style={styles.panelText}>O Dine posiciona o restaurante no mapa automaticamente pelo endereço.</Text>
+              </View>
+            </View>
+            <View style={styles.registerSection}>
+              <Field
+                label="Endereço completo"
+                value={form.address || ''}
+                error={registerErrors.address}
+                onChangeText={(value) => {
+                  setForm((current) => ({ ...current, address: value, latitude: '', longitude: '' }));
+                  setRegisterErrors((current) => ({ ...current, address: '' }));
+                }}
+                placeholder="Rua, número, bairro, cidade e estado"
+              />
+              <Pressable accessibilityRole="button" accessibilityLabel="Confirmar endereço no mapa" onPress={() => locateRestaurantAddress(true)} disabled={registerLocating} style={styles.registerLocateButton}>
+                <Ionicons name={registerLocating ? 'hourglass-outline' : 'map-outline'} size={19} color={colors.card} />
+                <Text style={styles.registerLocateButtonText}>{registerLocating ? 'Localizando...' : 'Confirmar endereço no mapa'}</Text>
+              </Pressable>
+              {parseOptionalCoordinate(form.latitude) && parseOptionalCoordinate(form.longitude) ? (
+                <View style={styles.registerLocationConfirmed}>
+                  <Ionicons name="checkmark-circle" size={21} color={colors.green} />
+                  <View style={styles.registerLocationConfirmedCopy}>
+                    <Text style={styles.registerLocationConfirmedTitle}>Pin confirmado</Text>
+                    <Text style={styles.registerLocationConfirmedText}>{Number(form.latitude).toFixed(5)}, {Number(form.longitude).toFixed(5)}</Text>
+                  </View>
+                </View>
+              ) : null}
+              <Field label="WhatsApp" value={form.whatsapp || ''} error={registerErrors.contact} onChangeText={(value) => setRestaurantFormField('whatsapp', value, 'contact')} placeholder="(17) 99999-9999" keyboardType="phone-pad" />
+              <Field label="Telefone alternativo" value={form.phone || ''} onChangeText={(value) => setRestaurantFormField('phone', value, 'contact')} placeholder="Opcional" keyboardType="phone-pad" />
+              <Field label="Instagram" value={form.instagram || ''} onChangeText={(value) => setRestaurantFormField('instagram', value)} placeholder="@restaurante" autoCapitalize="none" />
+              <Field label="Link de reserva" value={form.reservationUrl || ''} onChangeText={(value) => setRestaurantFormField('reservationUrl', value)} placeholder="https://..." autoCapitalize="none" />
+            </View>
+          </>
+        ) : null}
+
+        {registerStep === 2 ? (
+          <>
+            <View style={styles.registerHero}>
+              <Ionicons name="images-outline" size={26} color={colors.redDark} />
+              <View style={styles.registerHeroCopy}>
+                <Text style={styles.panelTitle}>Fotos e cardápio</Text>
+                <Text style={styles.panelText}>Uma boa capa e pratos bem descritos aumentam a confiança antes da visita.</Text>
+              </View>
+            </View>
+            <View style={styles.registerSection}>
+              <View style={styles.registerPhotoGrid}>
+                <Pressable onPress={() => pickRestaurantImage('coverPhoto')} style={({ pressed }) => [styles.registerPhotoCard, registerErrors.coverPhoto && styles.registerPhotoCardError, pressed && styles.activePress]}>
+                  {(form.coverPhoto || form.image) ? <Image source={imageSource(form.coverPhoto || form.image)} style={styles.registerPhotoPreview} /> : <Ionicons name="image-outline" size={28} color={colors.redDark} />}
+                  {(form.coverPhoto || form.image) ? <View style={styles.registerPhotoScrim} /> : null}
+                  <Text style={styles.registerPhotoTitle}>Foto de capa</Text>
+                  <Text style={styles.registerPhotoText}>{(form.coverPhoto || form.image) ? 'Trocar foto' : 'Obrigatória'}</Text>
+                </Pressable>
+                <Pressable onPress={() => pickRestaurantImage('logo')} style={({ pressed }) => [styles.registerPhotoCard, pressed && styles.activePress]}>
+                  {form.logo ? <Image source={imageSource(form.logo)} style={styles.registerPhotoPreview} /> : <Ionicons name="storefront-outline" size={28} color={colors.redDark} />}
+                  {form.logo ? <View style={styles.registerPhotoScrim} /> : null}
+                  <Text style={styles.registerPhotoTitle}>Logo</Text>
+                  <Text style={styles.registerPhotoText}>{form.logo ? 'Trocar logo' : 'Opcional'}</Text>
+                </Pressable>
+                <Pressable onPress={pickRestaurantExtraPhotos} style={({ pressed }) => [styles.registerPhotoCard, pressed && styles.activePress]}>
+                  <Ionicons name="images-outline" size={28} color={colors.redDark} />
+                  <Text style={styles.registerPhotoTitle}>Galeria</Text>
+                  <Text style={styles.registerPhotoText}>{parseList(form.photosText).length} fotos</Text>
+                </Pressable>
+              </View>
+              {registerErrors.coverPhoto ? <Text style={styles.fieldErrorText}>{registerErrors.coverPhoto}</Text> : null}
+              {parseList(form.photosText).length ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.registerExtraPhotoRow}>
+                  {parseList(form.photosText).map((photo, index) => (
+                    <View key={`${photo}-${index}`} style={styles.registerExtraPhotoWrap}>
+                      <Image source={imageSource(photo)} style={styles.registerExtraPhoto} />
+                      <Pressable onPress={() => setForm((current) => ({ ...current, photosText: parseList(current.photosText).filter((_, photoIndex) => photoIndex !== index).join('\n') }))} style={styles.registerExtraPhotoRemove}>
+                        <Ionicons name="close" size={14} color={colors.card} />
+                      </Pressable>
+                    </View>
+                  ))}
+                </ScrollView>
+              ) : null}
+            </View>
+            <View style={styles.registerSection}>
+              <View style={styles.registerSectionHeaderBetween}>
+                <View style={styles.registerSectionHeader}>
+                  <Ionicons name="restaurant-outline" size={20} color={colors.redDark} />
+                  <Text style={styles.registerSectionTitle}>Itens do cardápio</Text>
+                </View>
+                <Pressable accessibilityRole="button" accessibilityLabel="Adicionar item ao cardápio" onPress={addMenuDraftItem} style={styles.registerAddButton}>
+                  <Ionicons name="add" size={18} color={colors.redDark} />
+                  <Text style={styles.registerAddButtonText}>Adicionar</Text>
+                </Pressable>
+              </View>
+              {menuDraftItems.length ? menuDraftItems.map((dish, index) => (
+                <View key={dish.id || index} style={styles.registerMenuItem}>
+                  <Pressable onPress={() => pickRestaurantMenuItemImage(index)} style={styles.registerMenuPhoto}>
+                    {dish.image ? <Image source={imageSource(dish.image)} style={styles.registerMenuPhotoImage} /> : <Ionicons name="camera-outline" size={23} color={colors.redDark} />}
+                  </Pressable>
+                  <View style={styles.registerMenuFields}>
+                    <Field label={`Item ${index + 1}`} value={dish.name || ''} onChangeText={(value) => updateMenuDraftItem(index, 'name', value)} placeholder="Nome do prato" />
+                    <View style={styles.registerMenuInline}>
+                      <View style={styles.registerMenuInlineField}>
+                        <Field label="Categoria" value={dish.category || ''} onChangeText={(value) => updateMenuDraftItem(index, 'category', value)} placeholder="Principal" />
+                      </View>
+                      <View style={styles.registerMenuPriceField}>
+                        <Field label="Preço" value={String(dish.price || '')} onChangeText={(value) => updateMenuDraftItem(index, 'price', value)} placeholder="49,90" keyboardType="decimal-pad" />
+                      </View>
+                    </View>
+                    <Field label="Descrição" value={dish.description || ''} onChangeText={(value) => updateMenuDraftItem(index, 'description', value)} placeholder="Ingredientes e acompanhamentos" multiline />
+                  </View>
+                  <Pressable onPress={() => setForm((current) => ({ ...current, menuDraftItems: (current.menuDraftItems || []).filter((_, itemIndex) => itemIndex !== index) }))} style={styles.registerMenuRemove}>
+                    <Ionicons name="trash-outline" size={18} color={colors.redDark} />
                   </Pressable>
                 </View>
-              ))}
-            </ScrollView>
-          ) : null}
-          <Field label="Itens do cardápio" value={form.menuText} onChangeText={(value) => setForm({ ...form, menuText: value })} placeholder="Prato | 49.90" multiline />
-        </View>
-        <View style={styles.registerSection}>
-          <View style={styles.registerSectionHeader}>
-            <Ionicons name="time-outline" size={20} color={colors.redDark} />
-            <Text style={styles.registerSectionTitle}>Funcionamento</Text>
-          </View>
-          <Field label="Horários" value={form.openingHoursText} onChangeText={(value) => setForm({ ...form, openingHoursText: value })} placeholder="segunda: 18:00-23:00" multiline />
-          <Field label="Feriados fechados" value={form.holidayClosuresText} onChangeText={(value) => setForm({ ...form, holidayClosuresText: value })} placeholder="2026-12-25 | Natal" multiline />
-          <Field label="Tags" value={form.tagsText} onChangeText={(value) => setForm({ ...form, tagsText: value })} placeholder="romântico, pet friendly" />
-          <Field label="Destaques" value={form.highlightsText} onChangeText={(value) => setForm({ ...form, highlightsText: value })} placeholder="Carta de vinhos, varanda" />
-        </View>
-        <View style={styles.registerSubmit}>
-          <AppButton onPress={submitRestaurant}>{editingRestaurant ? 'Salvar alterações' : 'Enviar para aprovação'}</AppButton>
+              )) : (
+                <Pressable onPress={addMenuDraftItem} style={styles.registerMenuEmpty}>
+                  <Ionicons name="add-circle-outline" size={26} color={colors.redDark} />
+                  <Text style={styles.registerMenuEmptyTitle}>Adicionar primeiro prato</Text>
+                  <Text style={styles.registerMenuEmptyText}>O cardápio pode ser completado depois.</Text>
+                </Pressable>
+              )}
+            </View>
+          </>
+        ) : null}
+
+        {registerStep === 3 ? (
+          <>
+            <View style={styles.registerHero}>
+              <Ionicons name="checkmark-circle-outline" size={26} color={colors.redDark} />
+              <View style={styles.registerHeroCopy}>
+                <Text style={styles.panelTitle}>Funcionamento e revisão</Text>
+                <Text style={styles.panelText}>Confirme os horários e veja como o perfil aparecerá no Dine.</Text>
+              </View>
+            </View>
+            <View style={styles.registerSection}>
+              <View style={styles.registerSectionHeader}>
+                <Ionicons name="time-outline" size={20} color={colors.redDark} />
+                <Text style={styles.registerSectionTitle}>Horários</Text>
+              </View>
+              {restaurantWeekDays.map(([key, label]) => {
+                const hours = openingHoursDraft[key] || '';
+                return (
+                  <View key={key} style={styles.registerHoursRow}>
+                    <Pressable
+                      onPress={() => {
+                        setForm((current) => ({
+                          ...current,
+                          openingHoursDraft: { ...(current.openingHoursDraft || {}), [key]: hours ? '' : '09:00-18:00' }
+                        }));
+                        setRegisterErrors((current) => ({ ...current, openingHours: '' }));
+                      }}
+                      style={[styles.registerHoursToggle, hours && styles.registerHoursToggleActive]}
+                    >
+                      <Ionicons name={hours ? 'checkmark' : 'close'} size={15} color={hours ? colors.card : colors.muted} />
+                    </Pressable>
+                    <Text style={styles.registerHoursDay}>{label}</Text>
+                    <TextInput
+                      accessibilityLabel={`Horário de ${label}`}
+                      editable={Boolean(hours)}
+                      value={hours}
+                      onChangeText={(value) => {
+                        setForm((current) => ({ ...current, openingHoursDraft: { ...(current.openingHoursDraft || {}), [key]: value } }));
+                        setRegisterErrors((current) => ({ ...current, openingHours: '' }));
+                      }}
+                      placeholder={hours ? '09:00-18:00' : 'Fechado'}
+                      placeholderTextColor="#918A82"
+                      style={[styles.registerHoursInput, !hours && styles.registerHoursInputDisabled]}
+                    />
+                  </View>
+                );
+              })}
+              {registerErrors.openingHours ? <Text style={styles.fieldErrorText}>{registerErrors.openingHours}</Text> : null}
+              <Field label="Feriados fechados" value={form.holidayClosuresText || ''} onChangeText={(value) => setRestaurantFormField('holidayClosuresText', value)} placeholder="2026-12-25 | Natal" multiline />
+              <Field label="Comodidades e tags" value={form.tagsText || ''} onChangeText={(value) => setRestaurantFormField('tagsText', value)} placeholder="Pet friendly, área externa, acessível" />
+              <Field label="Destaques" value={form.highlightsText || ''} onChangeText={(value) => setRestaurantFormField('highlightsText', value)} placeholder="Carta de vinhos, varanda, música ao vivo" />
+            </View>
+            <View style={styles.registerPreview}>
+              <View style={styles.registerPreviewMedia}>
+                <Image source={imageSource(form.coverPhoto || form.image)} style={styles.registerPreviewImage} />
+                <View style={styles.registerPreviewOverlay} />
+                <View style={styles.registerPreviewCopy}>
+                  <Text style={styles.registerPreviewName}>{form.name || 'Nome do restaurante'}</Text>
+                  <Text style={styles.registerPreviewMeta}>{form.type || 'Categoria'} • {form.district || 'Bairro'} • {form.price || '$$'}</Text>
+                </View>
+              </View>
+              <View style={styles.registerPreviewDetails}>
+                {[
+                  ['location-outline', form.address || 'Endereço pendente'],
+                  ['logo-whatsapp', form.whatsapp || form.phone || 'Contato pendente'],
+                  ['time-outline', `${completedDays} dias com horário`],
+                  ['restaurant-outline', `${menuDraftItems.filter((dish) => dish.name).length} itens no cardápio`]
+                ].map(([icon, text]) => (
+                  <View key={text} style={styles.registerPreviewDetail}>
+                    <Ionicons name={icon} size={17} color={colors.redDark} />
+                    <Text numberOfLines={2} style={styles.registerPreviewDetailText}>{text}</Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.registerReviewNotice}>
+                <Ionicons name="information-circle-outline" size={20} color={colors.olive} />
+                <Text style={styles.registerReviewNoticeText}>
+                  {isAdmin ? 'Ao salvar, o status selecionado será aplicado ao perfil.' : 'Depois do envio, você poderá acompanhar a análise e corrigir pendências pelo painel.'}
+                </Text>
+              </View>
+            </View>
+          </>
+        ) : null}
+
+        <View style={styles.registerNavigation}>
+          {registerStep > 0 ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="Voltar etapa" onPress={() => { setRegisterStep((step) => step - 1); setRegisterErrors({}); }} style={styles.registerBackAction}>
+              <Ionicons name="chevron-back" size={19} color={colors.ink} />
+              <Text style={styles.registerBackActionText}>Voltar</Text>
+            </Pressable>
+          ) : <View />}
+          {registerStep < steps.length - 1 ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="Continuar" onPress={advanceRestaurantRegistration} style={styles.registerNextAction}>
+              <Text style={styles.registerNextActionText}>Continuar</Text>
+              <Ionicons name="chevron-forward" size={19} color={colors.card} />
+            </Pressable>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={editingRestaurant ? 'Salvar alterações' : 'Enviar para aprovação'}
+              onPress={finishRestaurantRegistration}
+              style={styles.registerNextAction}
+            >
+              <Ionicons name="paper-plane-outline" size={18} color={colors.card} />
+              <Text style={styles.registerNextActionText}>{editingRestaurant ? 'Salvar alterações' : 'Enviar para aprovação'}</Text>
+            </Pressable>
+          )}
         </View>
       </View>
     );
@@ -5701,6 +6281,7 @@ function postKey(restaurantId, postId) {
       <ExpoStatusBar style={appAppearance.statusBar} />
       <StatusBar barStyle={appAppearance.statusBar === 'light' ? 'light-content' : 'dark-content'} backgroundColor={appAppearance.bg} />
       <ScrollView
+        ref={mainScrollRef}
         style={[styles.screen, { backgroundColor: appAppearance.bg }]}
         scrollEnabled={!mapInteracting}
         contentContainerStyle={[
@@ -6986,11 +7567,17 @@ function AuthField({ label, icon, trailing, ...props }) {
   );
 }
 
-function Field({ label, ...props }) {
+function Field({ label, error, hint, ...props }) {
   return (
     <View style={styles.field}>
       <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput accessibilityLabel={props.accessibilityLabel || label} placeholderTextColor="#a19a90" style={[styles.fieldInput, props.multiline && styles.fieldTextarea]} {...props} />
+      <TextInput
+        accessibilityLabel={props.accessibilityLabel || label}
+        placeholderTextColor="#a19a90"
+        style={[styles.fieldInput, props.multiline && styles.fieldTextarea, error && styles.fieldInputError]}
+        {...props}
+      />
+      {error ? <Text style={styles.fieldErrorText}>{error}</Text> : hint ? <Text style={styles.fieldHintText}>{hint}</Text> : null}
     </View>
   );
 }
@@ -8360,8 +8947,9 @@ Object.assign(styles, {
   activityGroupTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 16, marginBottom: 7 },
   activityList: { borderBottomWidth: 1, borderBottomColor: colors.line },
   activityItem: { minHeight: 76, borderTopWidth: 1, borderTopColor: colors.softLine, flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, position: 'relative' },
-  activityAvatar: { width: 42, height: 42, borderRadius: 21, overflow: 'hidden', backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
+  activityAvatar: { width: 42, height: 42, borderRadius: 21, overflow: 'hidden', backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   activityAvatarImage: { width: '100%', height: '100%' },
+  activityTypeBadge: { position: 'absolute', right: 0, bottom: 0, width: 18, height: 18, borderRadius: 9, backgroundColor: colors.redDark, borderWidth: 2, borderColor: colors.card, alignItems: 'center', justifyContent: 'center' },
   activityAvatarText: { color: colors.card, fontFamily: bodyFont, fontSize: 15 },
   activityCopy: { flex: 1, minWidth: 0, gap: 2 },
   activityText: { color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17 },
@@ -8369,7 +8957,7 @@ Object.assign(styles, {
   activityTime: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10 },
   activityThumb: { width: 48, height: 48, borderRadius: 7, backgroundColor: colors.surface },
   activityUnread: { position: 'absolute', right: -8, width: 7, height: 7, borderRadius: 4, backgroundColor: colors.redDark },
-  activityEmpty: { minHeight: 110, alignItems: 'center', justifyContent: 'center', padding: 16 },
+  activityEmpty: { minHeight: 110, alignItems: 'center', justifyContent: 'center', padding: 16, gap: 7 },
   activityEmptyText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, textAlign: 'center' },
   pagePanel: { gap: 11, borderRadius: 8, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, padding: 14, marginBottom: 14 },
   button: { width: '100%', minHeight: 48, borderRadius: 8, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18, flexDirection: 'row', alignSelf: 'stretch' },
@@ -8439,6 +9027,83 @@ Object.assign(styles, {
   profileFoodMapPlace: { width: 76, gap: 3 },
   profileFoodMapPlaceImage: { width: 76, height: 56, borderRadius: 7, backgroundColor: colors.surface },
   profileFoodMapPlaceName: { color: colors.ink, fontFamily: bodyFont, fontSize: 9 },
+  fieldInputError: { borderColor: colors.redDark, backgroundColor: '#FFF8F5' },
+  fieldErrorText: { color: colors.redDark, fontFamily: 'Nunito_700Bold', fontSize: 11, lineHeight: 15 },
+  fieldHintText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 14 },
+  registerPage: { paddingTop: 2 },
+  registerProgress: { marginBottom: 16 },
+  registerProgressTop: { minHeight: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  registerProgressTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  registerDraftStatus: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  registerDraftStatusText: { color: colors.green, fontFamily: 'Nunito_400Regular', fontSize: 9 },
+  registerProgressTrack: { height: 4, borderRadius: 2, overflow: 'hidden', backgroundColor: '#ECE9E5' },
+  registerProgressFill: { height: '100%', borderRadius: 2, backgroundColor: colors.redDark },
+  registerStepRow: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 10 },
+  registerStepItem: { width: '24%', alignItems: 'center', gap: 4 },
+  registerStepIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#ECE9E5', alignItems: 'center', justifyContent: 'center' },
+  registerStepIconActive: { backgroundColor: colors.redDark },
+  registerStepLabel: { width: '100%', color: colors.muted, fontFamily: bodyFont, fontSize: 9, textAlign: 'center' },
+  registerStepLabelActive: { color: colors.redDark },
+  registerHero: { flexDirection: 'row', alignItems: 'center', gap: 11, borderRadius: 8, backgroundColor: '#FFF3ED', borderWidth: 0, padding: 13, marginBottom: 12 },
+  registerSection: { gap: 11, borderRadius: 8, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, padding: 14, marginBottom: 12 },
+  registerSectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingBottom: 1 },
+  registerSectionHeaderBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  registerSectionTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 17, lineHeight: 21 },
+  registerFieldLabel: { color: colors.muted, fontFamily: bodyFont, fontSize: 11, marginBottom: -4 },
+  registerChoiceWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  registerChoiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  registerChoice: { minHeight: 36, borderRadius: 7, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 11, alignItems: 'center', justifyContent: 'center' },
+  registerChoiceActive: { backgroundColor: colors.redDark, borderColor: colors.redDark },
+  registerChoiceText: { color: colors.ink, fontFamily: bodyFont, fontSize: 11 },
+  registerChoiceTextActive: { color: colors.card },
+  registerLocateButton: { minHeight: 44, borderRadius: 8, backgroundColor: colors.ink, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  registerLocateButtonText: { color: colors.card, fontFamily: bodyFont, fontSize: 12 },
+  registerLocationConfirmed: { minHeight: 54, borderRadius: 8, backgroundColor: colors.greenSoft, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  registerLocationConfirmedCopy: { flex: 1, minWidth: 0 },
+  registerLocationConfirmedTitle: { color: colors.green, fontFamily: bodyFont, fontSize: 12 },
+  registerLocationConfirmedText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, marginTop: 1 },
+  registerPhotoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  registerPhotoCard: { width: '48%', minHeight: 126, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(241,61,11,0.38)', backgroundColor: '#FFF7F3', alignItems: 'center', justifyContent: 'center', gap: 4, padding: 9, overflow: 'hidden' },
+  registerPhotoCardError: { borderColor: colors.redDark, borderWidth: 2 },
+  registerPhotoScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(255,255,255,0.28)' },
+  registerPhotoTitle: { zIndex: 2, color: colors.ink, fontFamily: bodyFont, fontSize: 12, textAlign: 'center' },
+  registerPhotoText: { zIndex: 2, color: colors.redDark, fontFamily: bodyFont, fontSize: 10, textAlign: 'center' },
+  registerAddButton: { minHeight: 34, borderRadius: 7, borderWidth: 1, borderColor: colors.redDark, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  registerAddButtonText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 10 },
+  registerMenuItem: { paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.softLine, flexDirection: 'row', alignItems: 'flex-start', gap: 9, position: 'relative' },
+  registerMenuPhoto: { width: 58, height: 58, borderRadius: 8, overflow: 'hidden', backgroundColor: '#FFF1EC', alignItems: 'center', justifyContent: 'center' },
+  registerMenuPhotoImage: { width: '100%', height: '100%' },
+  registerMenuFields: { flex: 1, minWidth: 0, gap: 8 },
+  registerMenuInline: { flexDirection: 'row', gap: 8 },
+  registerMenuInlineField: { flex: 1, minWidth: 0 },
+  registerMenuPriceField: { width: 88 },
+  registerMenuRemove: { width: 32, height: 32, borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1EC' },
+  registerMenuEmpty: { minHeight: 118, borderTopWidth: 1, borderTopColor: colors.softLine, alignItems: 'center', justifyContent: 'center', gap: 4, paddingTop: 12 },
+  registerMenuEmptyTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 13 },
+  registerMenuEmptyText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10 },
+  registerHoursRow: { minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 9, borderTopWidth: 1, borderTopColor: colors.softLine },
+  registerHoursToggle: { width: 28, height: 28, borderRadius: 7, backgroundColor: '#ECE9E5', alignItems: 'center', justifyContent: 'center' },
+  registerHoursToggleActive: { backgroundColor: colors.green },
+  registerHoursDay: { width: 65, color: colors.ink, fontFamily: bodyFont, fontSize: 11 },
+  registerHoursInput: { flex: 1, minWidth: 0, minHeight: 36, borderRadius: 7, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 10, color: colors.ink, fontFamily: bodyFont, fontSize: 11 },
+  registerHoursInputDisabled: { backgroundColor: '#F5F3F0', color: colors.muted },
+  registerPreview: { overflow: 'hidden', borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, marginBottom: 12 },
+  registerPreviewMedia: { height: 190, position: 'relative', backgroundColor: colors.surface },
+  registerPreviewImage: { width: '100%', height: '100%' },
+  registerPreviewOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.28)' },
+  registerPreviewCopy: { position: 'absolute', left: 13, right: 13, bottom: 12, gap: 2 },
+  registerPreviewName: { color: colors.card, fontFamily: titleFont, fontSize: 22 },
+  registerPreviewMeta: { color: 'rgba(255,255,255,0.9)', fontFamily: bodyFont, fontSize: 11 },
+  registerPreviewDetails: { padding: 12, gap: 8 },
+  registerPreviewDetail: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  registerPreviewDetailText: { flex: 1, minWidth: 0, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 11 },
+  registerReviewNotice: { margin: 12, marginTop: 0, borderRadius: 8, backgroundColor: colors.greenSoft, padding: 10, flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  registerReviewNoticeText: { flex: 1, color: colors.olive, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 15 },
+  registerNavigation: { minHeight: 54, marginBottom: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  registerBackAction: { minHeight: 44, borderRadius: 8, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5 },
+  registerBackActionText: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  registerNextAction: { minHeight: 44, borderRadius: 8, backgroundColor: colors.redDark, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  registerNextActionText: { color: colors.card, fontFamily: bodyFont, fontSize: 12 },
   settingsDangerZone: { marginTop: 2, marginBottom: 20 },
   settingsLogoutButton: { minHeight: 50, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(200,70,37,0.28)', backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   settingsLogoutText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 14 }

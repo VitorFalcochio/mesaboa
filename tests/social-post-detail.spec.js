@@ -25,7 +25,7 @@ test('opens a social post before navigating to its restaurant', async ({ page })
 
   await page.getByLabel('Adicionar comentario').fill('Quero conhecer este lugar.');
   await page.getByRole('button', { name: 'Publicar comentario' }).click();
-  await expect(page.getByText('Quero conhecer este lugar.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Quero conhecer este lugar.', { exact: true }).last()).toBeVisible();
 
   await page.getByRole('button', { name: /Abrir perfil de/ }).click();
   await expect(page.getByText('Publicacoes', { exact: true })).toBeVisible();
