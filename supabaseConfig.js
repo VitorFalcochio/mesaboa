@@ -615,6 +615,150 @@ export async function setFeedReactionInDb(postId, reaction, active, user) {
   });
 }
 
+function normalizeAppNotification(row) {
+  const payload = row?.app_payload || {};
+  return {
+    ...payload,
+    id: row?.legacy_id || payload.id,
+    userId: row?.user_legacy_id || payload.userId,
+    actorId: row?.actor_legacy_id || payload.actorId,
+    type: row?.type || payload.type || 'activity',
+    status: row?.status || payload.status || 'unread',
+    targetId: row?.target_legacy_id || payload.targetId || '',
+    createdAt: payload.createdAt || row?.created_at || nowIso()
+  };
+}
+
+export async function fetchSocialStateFromDb(userId) {
+  const client = requireClient();
+  if (!client || !userId) return null;
+  const [{ data: followRows, error: followsError }, { data: notificationRows, error: notificationsError }] = await Promise.all([
+    client
+      .from('social_follows')
+      .select('*')
+      .eq('follower_legacy_id', String(userId))
+      .eq('active', true)
+      .order('updated_at', { ascending: false }),
+    client
+      .from('app_notifications')
+      .select('*')
+      .eq('user_legacy_id', String(userId))
+      .order('created_at', { ascending: false })
+      .limit(60)
+  ]);
+  throwIfError(followsError);
+  throwIfError(notificationsError);
+  return {
+    followingProfiles: (followRows || []).map((row) => ({
+      ...(row.target_snapshot || {}),
+      id: row.target_legacy_id,
+      followedAt: row.created_at
+    })),
+    notifications: (notificationRows || []).map(normalizeAppNotification)
+  };
+}
+
+export async function fetchProfileSocialStatsFromDb(profileId) {
+  const client = requireClient();
+  if (!client || !profileId) return null;
+  const id = String(profileId);
+  const [
+    { data: profileRow, error: profileError },
+    { count: followers, error: followersError },
+    { count: following, error: followingError }
+  ] = await Promise.all([
+    client.from('app_profiles').select('*').eq('legacy_id', id).maybeSingle(),
+    client.from('social_follows').select('*', { count: 'exact', head: true }).eq('target_legacy_id', id).eq('active', true),
+    client.from('social_follows').select('*', { count: 'exact', head: true }).eq('follower_legacy_id', id).eq('active', true)
+  ]);
+  throwIfError(profileError);
+  throwIfError(followersError);
+  throwIfError(followingError);
+  const payload = profileRow?.app_payload || {};
+  return {
+    profile: profileRow ? {
+      ...payload,
+      id,
+      name: profileRow.full_name || payload.name || '',
+      instagram: profileRow.instagram || payload.instagram || '',
+      avatar: profileRow.photo_url || payload.photo || payload.avatar || '',
+      bio: profileRow.bio || payload.bio || '',
+      location: profileRow.location || payload.location || ''
+    } : null,
+    followers: Number(followers || 0),
+    following: Number(following || 0)
+  };
+}
+
+export async function setProfileFollowInDb(user, profile, active) {
+  assertSignedIn(user);
+  const targetId = String(profile?.id || '').trim();
+  if (!targetId || targetId === String(user.id)) return;
+  await upsertByLegacyId('social_follows', {
+    legacy_id: `${user.id}_${targetId}`,
+    follower_legacy_id: String(user.id),
+    target_legacy_id: targetId,
+    active: Boolean(active),
+    target_snapshot: cleanData({
+      id: targetId,
+      name: profile.name || '',
+      handle: profile.handle || '',
+      avatar: profile.avatar || '',
+      bio: profile.bio || '',
+      instagram: profile.instagram || ''
+    }),
+    updated_at: nowIso()
+  });
+  if (active) {
+    await createAppNotificationInDb({
+      userId: targetId,
+      actorId: String(user.id),
+      actorName: user.name || 'Alguém',
+      actorAvatar: user.photo || '',
+      type: 'follow',
+      message: 'começou a seguir você.',
+      targetId: String(user.id),
+      targetProfile: {
+        id: String(user.id),
+        name: user.name || '',
+        handle: user.handle || '',
+        avatar: user.photo || '',
+        bio: user.bio || '',
+        instagram: user.instagram || ''
+      }
+    });
+  }
+}
+
+export async function createAppNotificationInDb(notification) {
+  if (!notification?.userId || !notification?.type) return;
+  const createdAt = notification.createdAt || nowIso();
+  const id = notification.id || `${notification.userId}_${notification.type}_${notification.actorId || 'dine'}_${notification.targetId || Date.now()}_${Date.now()}`;
+  await upsertByLegacyId('app_notifications', {
+    legacy_id: id,
+    user_legacy_id: String(notification.userId),
+    actor_legacy_id: notification.actorId ? String(notification.actorId) : null,
+    type: notification.type,
+    status: notification.status || 'unread',
+    target_legacy_id: notification.targetId ? String(notification.targetId) : null,
+    app_payload: cleanData({ ...notification, id, createdAt }),
+    updated_at: nowIso()
+  });
+}
+
+export async function markAppNotificationsReadInDb(userId, notificationIds = []) {
+  const client = requireClient();
+  if (!client || !userId) return;
+  let query = client
+    .from('app_notifications')
+    .update({ status: 'read', updated_at: nowIso() })
+    .eq('user_legacy_id', String(userId))
+    .eq('status', 'unread');
+  if (notificationIds.length) query = query.in('legacy_id', notificationIds.map(String));
+  const { error } = await query;
+  throwIfError(error);
+}
+
 export async function reportContentInDb(report, user) {
   if (!report?.targetId || !report?.targetType) return;
   assertSignedIn(user);
@@ -809,6 +953,8 @@ export async function deleteUserAccountInDb(user) {
     client.from('feed_posts').update({ status: 'deleted', updated_at: nowIso() }).eq('author_legacy_id', userId),
     client.from('feed_comments').update({ status: 'deleted', updated_at: nowIso() }).eq('author_legacy_id', userId),
     client.from('feed_reactions').delete().eq('user_legacy_id', userId),
+    client.from('social_follows').delete().or(`follower_legacy_id.eq.${userId},target_legacy_id.eq.${userId}`),
+    client.from('app_notifications').delete().or(`user_legacy_id.eq.${userId},actor_legacy_id.eq.${userId}`),
     client.from('user_blocks').delete().eq('user_legacy_id', userId),
     client.from('push_tokens').delete().eq('user_legacy_id', userId),
     client.from('invites').update({ status: 'deleted', updated_at: nowIso() }).eq('owner_legacy_id', userId),
