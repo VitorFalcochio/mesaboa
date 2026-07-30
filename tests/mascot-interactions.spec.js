@@ -27,3 +27,31 @@ test('celebrates a newly favorited restaurant without blocking navigation', asyn
   await expect(page.getByRole('button', { name: /^Remover .* dos favoritos$/ }).first()).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
+
+test('shows the mascot campaign carousel in Explore', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  await createUserAccount(page);
+  await expect(page.getByRole('button', { name: 'Abrir destaque Hoje combina com burger' })).toBeVisible();
+  await page.getByRole('button', { name: 'Mostrar destaque 4 de 4' }).click();
+  await expect(page.getByRole('button', { name: 'Abrir destaque Tem lugar novo na área' })).toBeVisible();
+  await page.getByRole('button', { name: 'Abrir destaque Tem lugar novo na área' }).click();
+  await expect(page.getByText('Novidades perto de você', { exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('celebrates social feed reactions with the mascot toast', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('dialog', (dialog) => dialog.accept());
+
+  await createUserAccount(page);
+  await page.getByRole('tab', { name: 'Ir para Feed' }).click();
+  await page.getByLabel(/^Curtir publicacao de /).first().click();
+
+  await expect(page.getByRole('alert')).toContainText('Curtida enviada');
+  await expect(page.getByLabel('Mascote Dine comemorando curtida enviada')).toBeVisible();
+  await expect(page.getByLabel(/^Remover curtida da publicacao de /).first()).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
