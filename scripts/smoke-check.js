@@ -123,6 +123,21 @@ check('social post detail flow is wired', () => {
   if (!supabase.includes('deleteFeedPostInDb')) throw new Error('missing owned post deletion helper');
 });
 
+check('social counts have no invented fallbacks', () => {
+  const app = read('App.js');
+  const inventedPatterns = [
+    /followers:\s*12800/,
+    /followers:\s*842/,
+    /followers:\s*2450/,
+    /totalLikes\s*\+\s*120/,
+    /following\s*\|\|\s*80/
+  ];
+  if (inventedPatterns.some((pattern) => pattern.test(app))) {
+    throw new Error('invented follower/following counts are still present');
+  }
+  if (!app.includes('socialStatsLoaded')) throw new Error('social loading state is missing');
+});
+
 check('web map markers stay coordinate anchored', () => {
   const app = read('App.js');
   if (!app.includes('style={[styles.webMapMarker, { left: point.left, top: point.top }]}')) {

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   Alert,
   Animated,
   Easing,
@@ -392,6 +393,20 @@ const builtInAdminEmails = demoDataEnabled ? [demoAccountEmail] : [];
 const demoAccountId = 'vitor-demo';
 const demoAccountName = 'Vitor';
 const demoRestaurantId = 'vitor-falcochio-teste';
+const mascotAssets = {
+  anticipation: require('./Designer/Mascote/mascote-antecipacao.png'),
+  reservationConfirmed: require('./Designer/Mascote/mascote-reserva-confirmada.png'),
+  waitlist: require('./Designer/Mascote/mascote-lista-espera.png'),
+  wave: require('./Designer/Mascote/mascote-aceno.png'),
+  thumbsUp: require('./Designer/Mascote/mascote-joinha.png')
+};
+const discoveryCategoryAssets = {
+  sushi: require('./assets/categories/categoria-sushi.png'),
+  pizza: require('./assets/categories/categoria-pizza.png'),
+  hamburger: require('./assets/categories/categoria-hamburguer.png'),
+  brasileira: require('./assets/categories/categoria-brasileira.png'),
+  cafes: require('./assets/categories/categoria-cafes.png')
+};
 
 const collectionCurations = [
   {
@@ -532,7 +547,15 @@ function normalizeAccountType(value) {
 
 function normalizeDemoAccount(user) {
   if (!user) return user;
-  const normalizedUser = { ...user, accountType: normalizeAccountType(user.accountType) };
+  const followingProfiles = Array.isArray(user.followingProfiles) ? user.followingProfiles : [];
+  const normalizedUser = {
+    ...user,
+    accountType: normalizeAccountType(user.accountType),
+    followers: Math.max(0, Number(user.followers || 0)),
+    following: followingProfiles.length,
+    followingProfiles,
+    socialStatsLoaded: false
+  };
   if (!demoDataEnabled) return normalizedUser;
   if (normalize(normalizedUser.email) !== normalize(demoAccountEmail)) return normalizedUser;
   const demoSeed = seedUsers.find((item) => normalize(item.email) === normalize(demoAccountEmail));
@@ -762,9 +785,12 @@ function RestaurantCard({ item, favorite, onOpen, onFavorite }) {
         <View style={[styles.openBadge, openStatus.open && styles.openBadgeActive]}>
           <Text style={styles.openBadgeText}>{openStatus.label}</Text>
         </View>
-        <Pressable accessibilityRole="button" accessibilityLabel={favorite ? `Remover ${item.name} dos favoritos` : `Salvar ${item.name} nos favoritos`} hitSlop={8} onPress={() => onFavorite(item.name)} style={({ pressed }) => [styles.heartButton, pressed && styles.activePress]}>
-          <Ionicons name={favorite ? 'heart' : 'heart-outline'} size={22} color={colors.card} />
-        </Pressable>
+        <AnimatedFavoriteButton
+          favorite={favorite}
+          accessibilityLabel={favorite ? `Remover ${item.name} dos favoritos` : `Salvar ${item.name} nos favoritos`}
+          onPress={() => onFavorite(item.name)}
+          style={styles.heartButton}
+        />
         <View style={[styles.cardOverlay, hasLogo && styles.logoCardOverlay]}>
           <Text style={styles.cardTitle}>{item.name}</Text>
           <Text style={styles.cardMeta}>{item.type} • {item.district}</Text>
@@ -811,6 +837,58 @@ function buildRestaurantGeocodeQuery(item) {
     .map((value) => String(value || '').trim())
     .filter(Boolean);
   return parts.join(', ');
+}
+
+function AnimatedFavoriteButton({ favorite, accessibilityLabel, onPress, style, size = 22, color = colors.card }) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const rotate = useRef(new Animated.Value(0)).current;
+  const [reduceMotion, setReduceMotion] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((enabled) => mounted && setReduceMotion(Boolean(enabled)))
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  function handlePress(event) {
+    event?.stopPropagation?.();
+    if (!reduceMotion) {
+      scale.setValue(0.82);
+      rotate.setValue(-1);
+      Animated.parallel([
+        Animated.sequence([
+          Animated.spring(scale, { toValue: 1.34, friction: 4, tension: 190, useNativeDriver: true }),
+          Animated.spring(scale, { toValue: 1, friction: 5, tension: 130, useNativeDriver: true })
+        ]),
+        Animated.spring(rotate, { toValue: 0, friction: 4, tension: 120, useNativeDriver: true })
+      ]).start();
+    }
+    onPress?.();
+  }
+
+  const heartRotate = rotate.interpolate({
+    inputRange: [-1, 0],
+    outputRange: ['-12deg', '0deg']
+  });
+
+  return (
+    <Animated.View style={[style, { transform: [{ scale }, { rotate: heartRotate }] }]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityState={{ selected: favorite }}
+        hitSlop={8}
+        onPress={handlePress}
+        style={({ pressed }) => [styles.favoriteButtonFill, pressed && styles.activePress]}
+      >
+        <Ionicons name={favorite ? 'heart' : 'heart-outline'} size={size} color={color} />
+      </Pressable>
+    </Animated.View>
+  );
 }
 
 const dineNativeMapStyle = [
@@ -1495,6 +1573,8 @@ export default function App() {
   const homeDiscoveryScrollRef = useRef(null);
   const mainScrollRef = useRef(null);
   const demoRestaurantSeededRef = useRef(false);
+  const favoritesMutationRef = useRef(0);
+  const socialMutationRef = useRef(0);
   const [fontsLoaded] = useFonts({
     Baloo2_800ExtraBold,
     Nunito_400Regular,
@@ -1553,6 +1633,9 @@ export default function App() {
   const [reservations, setReservations] = useState([]);
   const [waitlistEntries, setWaitlistEntries] = useState([]);
   const [reservationRestaurant, setReservationRestaurant] = useState(null);
+  const [reservationCelebration, setReservationCelebration] = useState(null);
+  const [favoriteCelebration, setFavoriteCelebration] = useState(null);
+  const [restaurantCelebration, setRestaurantCelebration] = useState(null);
   const [feedReactions, setFeedReactions] = useState({});
   const [feedCommentDrafts, setFeedCommentDrafts] = useState({});
   const [feedPhotoIndexes, setFeedPhotoIndexes] = useState({});
@@ -1862,25 +1945,51 @@ export default function App() {
 
   useEffect(() => {
     if (!hydrated || !currentUser) return;
+    const mutationVersion = favoritesMutationRef.current;
     fetchFavoritesFromDb(currentUser.id)
       .then((remoteFavorites) => {
-        if (remoteFavorites) setFavorites(remoteFavorites);
+        if (remoteFavorites && favoritesMutationRef.current === mutationVersion) setFavorites(remoteFavorites);
       })
       .catch(() => {});
-  }, [currentUser, hydrated]);
+  }, [currentUser?.id, hydrated]);
 
   useEffect(() => {
     if (!hydrated || !currentUser?.id) {
       setActivityNotifications([]);
       return;
     }
+    const mutationVersion = socialMutationRef.current;
     fetchSocialStateFromDb(currentUser.id)
       .then((socialState) => {
-        if (!socialState) return;
+        if (!socialState) {
+          if (socialMutationRef.current !== mutationVersion) return;
+          setCurrentUser((user) => user ? {
+            ...user,
+            followers: 0,
+            following: (user.followingProfiles || []).length,
+            socialStatsLoaded: true
+          } : user);
+          return;
+        }
         setActivityNotifications(socialState.notifications || []);
-        setCurrentUser((user) => user ? { ...user, followingProfiles: socialState.followingProfiles || user.followingProfiles || [] } : user);
+        if (socialMutationRef.current !== mutationVersion) return;
+        setCurrentUser((user) => user ? {
+          ...user,
+          followingProfiles: socialState.followingProfiles || [],
+          followers: Math.max(0, Number(socialState.followers || 0)),
+          following: Math.max(0, Number(socialState.following || 0)),
+          socialStatsLoaded: true
+        } : user);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (socialMutationRef.current !== mutationVersion) return;
+        setCurrentUser((user) => user ? {
+          ...user,
+          followers: 0,
+          following: (user.followingProfiles || []).length,
+          socialStatsLoaded: true
+        } : user);
+      });
   }, [currentUser?.id, hydrated]);
 
   useEffect(() => {
@@ -2029,9 +2138,9 @@ export default function App() {
     const dish = dishes.find((item) => item.image) || dishes[0];
     const image = dish?.image || restaurant.coverPhoto || restaurant.image || defaultImage;
     const authorProfiles = [
-      { id: 'dine-curadoria', name: 'Dine Curadoria', handle: '@dine', bio: 'Roteiros, pratos e achados da cidade.', instagram: '@dineapp', followers: 12800, following: 42, avatar: restaurant.logo || restaurant.image },
-      { id: 'vitor-feed', name: 'Vitor', handle: '@vitor', bio: 'Compartilhando lugares bons para comer e voltar.', instagram: '@vitor', followers: 842, following: 318, avatar: restaurant.logo || restaurant.image },
-      { id: 'dine-comunidade', name: 'Dine Comunidade', handle: '@dine', bio: 'Momentos de mesa, pratos favoritos e novas descobertas.', instagram: '@dineapp', followers: 2450, following: 174, avatar: restaurant.logo || restaurant.image }
+      { id: 'dine-curadoria', name: 'Dine Curadoria', handle: '@dine', bio: 'Roteiros, pratos e achados da cidade.', instagram: '@dineapp', avatar: restaurant.logo || restaurant.image },
+      { id: 'vitor-feed', name: 'Vitor', handle: '@vitor', bio: 'Compartilhando lugares bons para comer e voltar.', instagram: '@vitor', avatar: restaurant.logo || restaurant.image },
+      { id: 'dine-comunidade', name: 'Dine Comunidade', handle: '@dine', bio: 'Momentos de mesa, pratos favoritos e novas descobertas.', instagram: '@dineapp', avatar: restaurant.logo || restaurant.image }
     ];
     const authorProfile = authorProfiles[index % authorProfiles.length];
     const captions = [
@@ -2194,6 +2303,14 @@ export default function App() {
 
   function toggleFavorite(name, user = currentUser) {
     if (!user && !requireLogin({ type: 'favorite', name })) return;
+    favoritesMutationRef.current += 1;
+    const addingFavorite = !favorites.includes(name);
+    if (addingFavorite) {
+      setFavoriteCelebration({
+        id: `${name}-${Date.now()}`,
+        name
+      });
+    }
     setFavorites((items) => {
       const exists = items.includes(name);
       if (!exists) awardPoints('favorite', name);
@@ -2343,7 +2460,7 @@ export default function App() {
       following: 0,
       avatar
     };
-    const profile = { ...baseProfile, avatar };
+    const profile = { ...baseProfile, avatar, socialStatsLoaded: false };
     const profileKey = profile.id || profile.handle || profile.name;
     const posts = feedPosts.filter((item) => {
       const itemProfile = item.authorProfile || {};
@@ -2356,7 +2473,13 @@ export default function App() {
     navigateTo('feedProfile');
     fetchProfileSocialStatsFromDb(profileKey)
       .then((socialProfile) => {
-        if (!socialProfile) return;
+        if (!socialProfile) {
+          setSelectedFeedProfile((current) => {
+            if (!current || String(current.id || current.handle || current.name) !== String(profileKey)) return current;
+            return { ...current, followers: 0, following: 0, socialStatsLoaded: true };
+          });
+          return;
+        }
         setSelectedFeedProfile((current) => {
           if (!current || String(current.id || current.handle || current.name) !== String(profileKey)) return current;
           return {
@@ -2369,7 +2492,12 @@ export default function App() {
           };
         });
       })
-      .catch(() => {});
+      .catch(() => {
+        setSelectedFeedProfile((current) => {
+          if (!current || String(current.id || current.handle || current.name) !== String(profileKey)) return current;
+          return { ...current, followers: 0, following: 0, socialStatsLoaded: true };
+        });
+      });
   }
 
   async function toggleFollowProfile(profile) {
@@ -2384,8 +2512,27 @@ export default function App() {
     const nextFollowing = isFollowing
       ? following.filter((item) => String(item.id) !== profileId)
       : [{ id: profileId, name: profile?.name || 'Perfil', handle: profile?.handle || '', avatar: profile?.avatar || '', followedAt: new Date().toISOString() }, ...following];
-    await updateCurrentUserProfile({ followingProfiles: nextFollowing });
-    setProfileFollowInDb(currentUser, { ...profile, id: profileId }, !isFollowing).catch(() => {
+    socialMutationRef.current += 1;
+    await updateCurrentUserProfile({ followingProfiles: nextFollowing, following: nextFollowing.length });
+    setSelectedFeedProfile((current) => {
+      if (!current || String(current.id || current.handle || current.name) !== profileId) return current;
+      if (!current.socialStatsLoaded) return current;
+      const delta = isFollowing ? -1 : 1;
+      return { ...current, followers: Math.max(0, Number(current.followers || 0) + delta) };
+    });
+    setProfileFollowInDb(currentUser, { ...profile, id: profileId }, !isFollowing).then(async () => {
+      const socialProfile = await fetchProfileSocialStatsFromDb(profileId);
+      if (!socialProfile) return;
+      setSelectedFeedProfile((current) => {
+        if (!current || String(current.id || current.handle || current.name) !== profileId) return current;
+        return {
+          ...current,
+          followers: socialProfile.followers,
+          following: socialProfile.following,
+          socialStatsLoaded: true
+        };
+      });
+    }).catch(() => {
       Alert.alert('Sincronização', 'A alteração ficou salva neste aparelho e será sincronizada quando o serviço estiver disponível.');
     });
   }
@@ -2489,7 +2636,8 @@ export default function App() {
         bio: 'Compartilhando momentos e descobertas gastronômicas.',
         instagram: String(currentUser?.instagram || '').trim(),
         followers: currentUser?.followers || 0,
-        following: currentUser?.following || 0,
+        following: (currentUser?.followingProfiles || []).length,
+        socialStatsLoaded: Boolean(currentUser?.socialStatsLoaded),
         avatar: currentUser?.photo || ''
       },
       image: photos[0],
@@ -3210,6 +3358,10 @@ export default function App() {
         bio: '',
         location: '',
         preferences: [],
+        followers: 0,
+        following: 0,
+        followingProfiles: [],
+        socialStatsLoaded: false,
         gamification: defaultGamification(),
         createdAt: now,
         security: { lastLoginAt: now, platform: Platform.OS }
@@ -3363,7 +3515,12 @@ export default function App() {
     AsyncStorage.removeItem(storageKeys.restaurantDraft).catch(() => {});
     setTab('Perfil');
     setActiveScreen(isAdmin ? { name: 'restaurantPanel', params: {} } : null);
-    Alert.alert('Restaurante salvo', isAdmin ? `${item.name} já está no painel para gerenciamento.` : `${item.name} foi enviado para aprovação.`);
+    setRestaurantCelebration({
+      id: `${item.id}-${Date.now()}`,
+      restaurant: item,
+      isAdmin,
+      wasEditing: Boolean(form.id)
+    });
   }
 
   function openMaps(item) {
@@ -3476,10 +3633,10 @@ export default function App() {
         ...items.filter((existing) => existing.id !== confirmedReservation.id)
       ]);
       recordRestaurantMetricInDb(item.id, 'reservationClicks').catch(() => {});
-      Alert.alert(
-        confirmedReservation.status === 'confirmed' ? 'Reserva confirmada' : 'Reserva solicitada',
-        `${item.name} • ${draft.date} às ${draft.time}`
-      );
+      setReservationCelebration({
+        reservation: confirmedReservation,
+        restaurant: item
+      });
       return true;
     } catch (error) {
       const unavailable = /SLOT_FULL|lotado|capacity/i.test(error?.message || '');
@@ -3968,11 +4125,11 @@ function postKey(restaurantId, postId) {
 
   function renderHome() {
     const discoveryCategories = [
-      ['Sushi', 'sushi', 'https://images.unsplash.com/photo-1579871494447-9811cf80d66c?auto=format&fit=crop&w=400&q=84'],
-      ['Pizza', 'pizza', 'https://images.unsplash.com/photo-1574071318508-1cdbab80d002?auto=format&fit=crop&w=400&q=84'],
-      ['Hambúrguer', 'hamburg', 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=400&q=84'],
-      ['Brasileira', 'brasileir', 'https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=400&q=84'],
-      ['Cafés', 'caf', 'https://images.unsplash.com/photo-1509042239860-f550ce710b93?auto=format&fit=crop&w=400&q=84']
+      ['Sushi', 'sushi', discoveryCategoryAssets.sushi],
+      ['Pizza', 'pizza', discoveryCategoryAssets.pizza],
+      ['Hambúrguer', 'hamburg', discoveryCategoryAssets.hamburger],
+      ['Brasileira', 'brasileir', discoveryCategoryAssets.brasileira],
+      ['Cafés', 'caf', discoveryCategoryAssets.cafes]
     ];
     const featuredRestaurant = discoveryRestaurants[homeDiscoveryIndex % Math.max(1, discoveryRestaurants.length)] || topRestaurants[0];
     const nearbyRestaurants = topRestaurants.slice(1, 6);
@@ -4020,7 +4177,7 @@ function postKey(restaurantId, postId) {
         </View>
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoveryCategoryRow}>
-          {discoveryCategories.map(([label, term, fallbackImage]) => {
+          {discoveryCategories.map(([label, term, categoryImage]) => {
             const match = publicRestaurants.find((item) => normalize(`${item.name} ${item.type} ${item.tags || ''}`).includes(term));
             return (
             <Pressable
@@ -4028,7 +4185,7 @@ function postKey(restaurantId, postId) {
               onPress={() => navigateTo('results', { title: label, trendTerms: [term] })}
               style={({ pressed }) => [styles.discoveryCategory, pressed && styles.pressed]}
             >
-              <Image source={{ uri: fallbackImage }} style={styles.discoveryCategoryImage} />
+              <Image source={categoryImage} style={styles.discoveryCategoryImage} />
               <Text style={styles.discoveryCategoryLabel}>{label}</Text>
             </Pressable>
             );
@@ -4040,9 +4197,12 @@ function postKey(restaurantId, postId) {
           <Pressable accessibilityRole="button" accessibilityLabel={`Abrir restaurante ${featuredRestaurant.name}`} onPress={() => setSelectedRestaurant(featuredRestaurant)} style={({ pressed }) => [styles.discoveryFeatureCard, pressed && styles.pressed]}>
             <Image source={imageSource(featuredRestaurant.coverPhoto || featuredRestaurant.image || featuredRestaurant.logo)} style={styles.discoveryFeatureImage} />
             <View style={styles.discoveryFeatureScrim} />
-            <Pressable onPress={(event) => { event?.stopPropagation?.(); toggleFavorite(featuredRestaurant.name); }} style={styles.discoverySaveButton}>
-              <Ionicons name={favorites.includes(featuredRestaurant.name) ? 'bookmark' : 'bookmark-outline'} size={22} color="#FFFFFF" />
-            </Pressable>
+            <AnimatedFavoriteButton
+              favorite={favorites.includes(featuredRestaurant.name)}
+              accessibilityLabel={favorites.includes(featuredRestaurant.name) ? `Remover ${featuredRestaurant.name} dos favoritos` : `Salvar ${featuredRestaurant.name} nos favoritos`}
+              onPress={() => toggleFavorite(featuredRestaurant.name)}
+              style={styles.discoverySaveButton}
+            />
             <View style={styles.discoveryFeatureCopy}>
               <Text numberOfLines={1} style={styles.discoveryFeatureName}>{featuredRestaurant.name}</Text>
               <View style={styles.discoveryFeatureMetaRow}>
@@ -4986,7 +5146,7 @@ function postKey(restaurantId, postId) {
           {[
             [String(authoredPosts.length), 'publicações'],
             [String(Math.max(favorites.length, gamification.metrics.known || 0)), 'lugares'],
-            [formatCompactCount(Number(currentUser?.followers || 0)), 'seguidores']
+            [currentUser?.socialStatsLoaded ? formatCompactCount(Number(currentUser.followers || 0)) : '—', 'seguidores']
           ].map(([value, label], index) => (
             <View key={label} style={[styles.dineProfileStatItem, index > 0 && styles.dineProfileStatDivider]}>
               <Text style={styles.dineProfileStatValue}>{value}</Text>
@@ -6057,10 +6217,8 @@ function postKey(restaurantId, postId) {
     const profileId = String(profile.id || profile.handle || profile.name || '');
     const isFollowing = following.some((item) => String(item.id) === profileId);
     const isOwnProfile = Boolean(currentUser?.id && String(currentUser.id) === profileId);
-    const totalLikes = posts.reduce((sum, post) => sum + Number(post.likes || 0), 0);
-    const followers = profile.socialStatsLoaded
-      ? Math.max(0, Number(profile.followers || 0))
-      : Math.max(0, Number(profile.followers || totalLikes + 120) + (isFollowing ? 1 : 0));
+    const followers = profile.socialStatsLoaded ? formatCompactCount(Math.max(0, Number(profile.followers || 0))) : '—';
+    const profileFollowing = profile.socialStatsLoaded ? formatCompactCount(Math.max(0, Number(profile.following || 0))) : '—';
     const instagram = String(profile.instagram || '').trim();
     const profileAvatar = String(profile.avatar || '').trim();
     const profileInitials = initialsForName(profile.name, 'D');
@@ -6091,8 +6249,8 @@ function postKey(restaurantId, postId) {
           <View style={styles.feedProfileStats}>
             {[
               ['Posts', posts.length],
-              ['Seguidores', formatCompactCount(followers)],
-              ['Seguindo', formatCompactCount(Number(profile.following || 80))]
+              ['Seguidores', followers],
+              ['Seguindo', profileFollowing]
             ].map(([label, value]) => (
               <View key={label} style={styles.feedProfileStat}>
                 <Text style={styles.feedProfileStatValue}>{value}</Text>
@@ -7227,6 +7385,11 @@ function postKey(restaurantId, postId) {
           </Pressable>
         ))}
       </View> : null}
+      <FavoriteCelebrationToast
+        key={favoriteCelebration?.id || 'favorite-celebration'}
+        celebration={favoriteCelebration}
+        onDone={() => setFavoriteCelebration(null)}
+      />
       <RestaurantModal
         item={selectedRestaurant}
         onClose={() => setSelectedRestaurant(null)}
@@ -7266,6 +7429,22 @@ function postKey(restaurantId, postId) {
         }}
         onWaitlist={(item, draft) => {
           if (joinRestaurantWaitlist(item, draft)) setReservationRestaurant(null);
+        }}
+      />
+      <ReservationCelebrationModal
+        celebration={reservationCelebration}
+        onClose={() => setReservationCelebration(null)}
+        onViewReservations={() => {
+          setReservationCelebration(null);
+          navigateTo('myReservations');
+        }}
+      />
+      <RestaurantRegistrationCelebrationModal
+        celebration={restaurantCelebration}
+        onClose={() => setRestaurantCelebration(null)}
+        onViewPanel={() => {
+          setRestaurantCelebration(null);
+          navigateTo('restaurantPanel');
         }}
       />
       <PostViewerModal
@@ -7543,6 +7722,417 @@ function FeedComposerModal({ visible, draft, setDraft, restaurants, onClose, onP
   );
 }
 
+function FavoriteCelebrationToast({ celebration, onDone }) {
+  const visible = Boolean(celebration?.name);
+  const opacity = useRef(new Animated.Value(0)).current;
+  const scale = useRef(new Animated.Value(0.72)).current;
+  const lift = useRef(new Animated.Value(18)).current;
+  const heartScale = useRef(new Animated.Value(0.4)).current;
+  const onDoneRef = useRef(onDone);
+
+  useEffect(() => {
+    onDoneRef.current = onDone;
+  }, [onDone]);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    let animation;
+    let dismissTimer;
+    let mounted = true;
+
+    AccessibilityInfo.isReduceMotionEnabled().catch(() => false).then((reduceMotion) => {
+      if (!mounted) return;
+      opacity.setValue(0);
+      scale.setValue(reduceMotion ? 1 : 0.72);
+      lift.setValue(reduceMotion ? 0 : 18);
+      heartScale.setValue(reduceMotion ? 1 : 0.4);
+
+      animation = Animated.sequence([
+        Animated.parallel([
+          Animated.timing(opacity, { toValue: 1, duration: reduceMotion ? 80 : 170, useNativeDriver: true }),
+          Animated.spring(scale, { toValue: 1, friction: 5, tension: 120, useNativeDriver: true }),
+          Animated.spring(lift, { toValue: 0, friction: 5, tension: 110, useNativeDriver: true }),
+          Animated.sequence([
+            Animated.spring(heartScale, { toValue: reduceMotion ? 1 : 1.38, friction: 4, tension: 180, useNativeDriver: true }),
+            Animated.spring(heartScale, { toValue: 1, friction: 5, tension: 130, useNativeDriver: true })
+          ])
+        ]),
+        Animated.delay(reduceMotion ? 1050 : 1450),
+        Animated.timing(opacity, { toValue: 0, duration: reduceMotion ? 100 : 220, useNativeDriver: true })
+      ]);
+      animation.start(({ finished }) => {
+        if (finished) onDoneRef.current?.();
+      });
+      dismissTimer = setTimeout(() => onDoneRef.current?.(), reduceMotion ? 1500 : 2250);
+    });
+
+    return () => {
+      mounted = false;
+      animation?.stop();
+      clearTimeout(dismissTimer);
+    };
+  }, [visible, celebration?.id]);
+
+  if (!visible) return null;
+
+  return (
+    <View pointerEvents="none" style={styles.favoriteToastLayer}>
+      <Animated.View
+        accessibilityRole="alert"
+        accessibilityLiveRegion="polite"
+        style={[styles.favoriteToast, { opacity, transform: [{ translateY: lift }, { scale }] }]}
+      >
+        <Image accessibilityLabel="Mascote Dine comemorando o favorito" source={mascotAssets.thumbsUp} resizeMode="contain" style={styles.favoriteToastMascot} />
+        <View style={styles.favoriteToastCopy}>
+          <Text style={styles.favoriteToastEyebrow}>+10 pontos</Text>
+          <Text style={styles.favoriteToastTitle}>Boa escolha!</Text>
+          <Text numberOfLines={1} style={styles.favoriteToastText}>{celebration.name} foi salvo.</Text>
+        </View>
+        <Animated.View style={[styles.favoriteToastHeart, { transform: [{ scale: heartScale }] }]}>
+          <Ionicons name="heart" size={21} color={colors.card} />
+        </Animated.View>
+      </Animated.View>
+    </View>
+  );
+}
+
+function RestaurantRegistrationCelebrationModal({ celebration, onClose, onViewPanel }) {
+  const { height: viewportHeight } = useWindowDimensions();
+  const visible = Boolean(celebration?.restaurant);
+  const restaurant = celebration?.restaurant;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const mascotScale = useRef(new Animated.Value(0.7)).current;
+  const mascotLift = useRef(new Animated.Value(64)).current;
+  const contentOpacity = useRef(new Animated.Value(0)).current;
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const [mascotPose, setMascotPose] = useState('wave');
+  const compactHeight = viewportHeight < 700;
+
+  useEffect(() => {
+    let mounted = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((enabled) => mounted && setReduceMotion(Boolean(enabled)))
+      .catch(() => {});
+    const subscription = AccessibilityInfo.addEventListener?.('reduceMotionChanged', setReduceMotion);
+    return () => {
+      mounted = false;
+      subscription?.remove?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    backdropOpacity.setValue(0);
+    contentOpacity.setValue(0);
+    mascotScale.setValue(reduceMotion ? 1 : 0.7);
+    mascotLift.setValue(reduceMotion ? 0 : 64);
+    setMascotPose(reduceMotion ? 'result' : 'wave');
+
+    if (reduceMotion) {
+      backdropOpacity.setValue(1);
+      contentOpacity.setValue(1);
+      return undefined;
+    }
+
+    const poseTimer = setTimeout(() => setMascotPose('result'), 240);
+    const animation = Animated.sequence([
+      Animated.parallel([
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+        Animated.spring(mascotScale, { toValue: 1.08, friction: 5, tension: 92, useNativeDriver: true }),
+        Animated.spring(mascotLift, { toValue: -12, friction: 5, tension: 88, useNativeDriver: true })
+      ]),
+      Animated.parallel([
+        Animated.spring(mascotScale, { toValue: 1, friction: 5, tension: 74, useNativeDriver: true }),
+        Animated.spring(mascotLift, { toValue: 0, friction: 4, tension: 72, useNativeDriver: true }),
+        Animated.timing(contentOpacity, { toValue: 1, duration: 240, useNativeDriver: true })
+      ])
+    ]);
+    animation.start();
+    return () => {
+      clearTimeout(poseTimer);
+      animation.stop();
+    };
+  }, [visible, celebration?.id, reduceMotion]);
+
+  if (!visible) return null;
+
+  const title = celebration.wasEditing
+    ? 'Alterações salvas!'
+    : celebration.isAdmin
+      ? 'Restaurante publicado!'
+      : 'Cadastro enviado!';
+  const subtitle = celebration.wasEditing
+    ? 'O perfil já está atualizado no painel.'
+    : celebration.isAdmin
+      ? 'O restaurante já está disponível para gerenciamento.'
+      : 'Agora nossa equipe vai analisar os dados. Você acompanha tudo pelo painel.';
+
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <Animated.View accessibilityViewIsModal style={[styles.celebrationBackdrop, { opacity: backdropOpacity }]}>
+        <View style={[styles.celebrationCard, compactHeight && styles.celebrationCardCompact]}>
+          <View style={styles.celebrationGlow} />
+          <View style={[styles.registrationCelebrationStage, compactHeight && styles.registrationCelebrationStageCompact]}>
+            <View style={[styles.registrationCelebrationSpark, styles.registrationCelebrationSparkOne]}>
+              <Ionicons name="sparkles" size={18} color={colors.gold} />
+            </View>
+            <View style={[styles.registrationCelebrationSpark, styles.registrationCelebrationSparkTwo]}>
+              <Ionicons name="storefront" size={18} color={colors.redDark} />
+            </View>
+            <Animated.Image
+              accessibilityLabel="Mascote Dine comemorando o cadastro do restaurante"
+              source={mascotPose === 'wave' ? mascotAssets.wave : mascotAssets.thumbsUp}
+              resizeMode="contain"
+              style={[
+                styles.registrationCelebrationMascot,
+                compactHeight && styles.registrationCelebrationMascotCompact,
+                { transform: [{ translateY: mascotLift }, { scale: mascotScale }] }
+              ]}
+            />
+          </View>
+          <Animated.View style={[styles.celebrationContent, { opacity: contentOpacity }]}>
+            <View style={styles.celebrationStatusIcon}>
+              <Ionicons name="checkmark" size={23} color={colors.card} />
+            </View>
+            <Text accessibilityLiveRegion="polite" style={[styles.celebrationTitle, compactHeight && styles.celebrationTitleCompact]}>{title}</Text>
+            <Text style={[styles.celebrationSubtitle, compactHeight && styles.celebrationSubtitleCompact]}>{subtitle}</Text>
+            <View style={styles.registrationCelebrationRestaurant}>
+              <Image source={imageSource(restaurant.logo || restaurant.coverPhoto || restaurant.image)} style={styles.celebrationRestaurantImage} />
+              <View style={styles.celebrationReservationCopy}>
+                <Text numberOfLines={1} style={styles.celebrationRestaurantName}>{restaurant.name}</Text>
+                <Text style={styles.celebrationReservationMeta}>{restaurant.type} • {restaurant.district}</Text>
+              </View>
+              <View style={styles.registrationCelebrationStatus}>
+                <Text style={styles.registrationCelebrationStatusText}>{celebration.isAdmin ? 'Ativo' : 'Em análise'}</Text>
+              </View>
+            </View>
+            <AppButton onPress={onViewPanel}>Ir para o painel</AppButton>
+            <Pressable accessibilityRole="button" onPress={onClose} style={styles.celebrationSecondaryAction}>
+              <Text style={styles.celebrationSecondaryText}>Fechar</Text>
+            </Pressable>
+          </Animated.View>
+        </View>
+      </Animated.View>
+    </Modal>
+  );
+}
+
+function ReservationCelebrationModal({ celebration, onClose, onViewReservations }) {
+  const { height: viewportHeight } = useWindowDimensions();
+  const visible = Boolean(celebration?.reservation);
+  const reservation = celebration?.reservation;
+  const restaurant = celebration?.restaurant;
+  const confirmed = reservation?.status === 'confirmed';
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const mascotScale = useRef(new Animated.Value(0.68)).current;
+  const mascotLift = useRef(new Animated.Value(82)).current;
+  const mascotTilt = useRef(new Animated.Value(-7)).current;
+  const contentOpacity = useRef(new Animated.Value(0)).current;
+  const particles = useRef(new Animated.Value(0)).current;
+  const [reduceMotion, setReduceMotion] = useState(false);
+  const [mascotPose, setMascotPose] = useState('anticipation');
+  const compactHeight = viewportHeight < 700;
+
+  useEffect(() => {
+    let mounted = true;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((enabled) => mounted && setReduceMotion(Boolean(enabled)))
+      .catch(() => {});
+    const subscription = AccessibilityInfo.addEventListener?.('reduceMotionChanged', setReduceMotion);
+    return () => {
+      mounted = false;
+      subscription?.remove?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return undefined;
+    [backdropOpacity, contentOpacity, particles].forEach((value) => value.setValue(0));
+    mascotScale.setValue(reduceMotion ? 1 : 0.68);
+    mascotLift.setValue(reduceMotion ? 0 : 82);
+    mascotTilt.setValue(reduceMotion ? 0 : -7);
+    setMascotPose(confirmed && !reduceMotion ? 'anticipation' : 'result');
+
+    if (reduceMotion) {
+      backdropOpacity.setValue(1);
+      contentOpacity.setValue(1);
+      particles.setValue(1);
+      return undefined;
+    }
+
+    const poseTimer = setTimeout(() => setMascotPose('result'), confirmed ? 190 : 0);
+    const animation = Animated.sequence([
+      Animated.parallel([
+        Animated.timing(backdropOpacity, {
+          toValue: 1,
+          duration: 180,
+          useNativeDriver: true
+        }),
+        Animated.spring(mascotScale, {
+          toValue: 1.08,
+          friction: 5,
+          tension: 92,
+          useNativeDriver: true
+        }),
+        Animated.spring(mascotLift, {
+          toValue: -16,
+          friction: 5,
+          tension: 88,
+          useNativeDriver: true
+        }),
+        Animated.spring(mascotTilt, {
+          toValue: 3,
+          friction: 5,
+          tension: 78,
+          useNativeDriver: true
+        })
+      ]),
+      Animated.parallel([
+        Animated.spring(mascotScale, {
+          toValue: 1,
+          friction: 5,
+          tension: 74,
+          useNativeDriver: true
+        }),
+        Animated.spring(mascotLift, {
+          toValue: 0,
+          friction: 4,
+          tension: 72,
+          useNativeDriver: true
+        }),
+        Animated.spring(mascotTilt, {
+          toValue: 0,
+          friction: 4,
+          tension: 68,
+          useNativeDriver: true
+        }),
+        Animated.timing(contentOpacity, {
+          toValue: 1,
+          duration: 260,
+          useNativeDriver: true
+        }),
+        Animated.timing(particles, {
+          toValue: 1,
+          duration: 420,
+          useNativeDriver: true
+        })
+      ])
+    ]);
+    animation.start();
+    return () => {
+      clearTimeout(poseTimer);
+      animation.stop();
+    };
+  }, [visible, reservation?.id, reduceMotion, confirmed]);
+
+  if (!visible) return null;
+
+  const formattedDate = String(reservation.date || '')
+    .split('-')
+    .reverse()
+    .join('/');
+  const mascotSource = confirmed
+    ? (mascotPose === 'anticipation' ? mascotAssets.anticipation : mascotAssets.reservationConfirmed)
+    : mascotAssets.waitlist;
+  const title = confirmed ? 'Reserva confirmada!' : 'Reserva solicitada!';
+  const subtitle = confirmed
+    ? 'Mesa garantida. Agora é só aproveitar o momento.'
+    : 'O restaurante recebeu seu pedido e vai confirmar em breve.';
+  const particleOpacity = particles.interpolate({
+    inputRange: [0, 0.2, 0.8, 1],
+    outputRange: [0, 1, 1, 0.84]
+  });
+  const particleScale = particles.interpolate({
+    inputRange: [0, 0.45, 1],
+    outputRange: [0.3, 1.16, 1]
+  });
+  const mascotRotate = mascotTilt.interpolate({
+    inputRange: [-10, 10],
+    outputRange: ['-10deg', '10deg']
+  });
+
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onClose}>
+      <Animated.View
+        accessibilityViewIsModal
+        style={[styles.celebrationBackdrop, { opacity: backdropOpacity }]}
+      >
+        <View style={[styles.celebrationCard, compactHeight && styles.celebrationCardCompact]}>
+          <View style={styles.celebrationGlow} />
+          <View style={[styles.celebrationMascotStage, compactHeight && styles.celebrationMascotStageCompact]}>
+            {[
+              ['restaurant', styles.celebrationParticleOne],
+              ['star', styles.celebrationParticleTwo],
+              ['sparkles', styles.celebrationParticleThree],
+              ['heart', styles.celebrationParticleFour]
+            ].map(([icon, position]) => (
+              <Animated.View
+                key={icon}
+                style={[
+                  styles.celebrationParticle,
+                  position,
+                  { opacity: particleOpacity, transform: [{ scale: particleScale }] }
+                ]}
+              >
+                <Ionicons
+                  name={icon}
+                  size={icon === 'star' ? 19 : 17}
+                  color={icon === 'heart' ? colors.redDark : colors.gold}
+                />
+              </Animated.View>
+            ))}
+            <Animated.Image
+              accessibilityLabel={confirmed ? 'Mascote Dine comemorando a reserva' : 'Mascote Dine aguardando confirmação'}
+              source={mascotSource}
+              resizeMode="contain"
+              style={[
+                styles.celebrationMascot,
+                compactHeight && styles.celebrationMascotCompact,
+                {
+                  transform: [
+                    { translateY: mascotLift },
+                    { scale: mascotScale },
+                    { rotate: mascotRotate }
+                  ]
+                }
+              ]}
+            />
+          </View>
+
+          <Animated.View style={[styles.celebrationContent, { opacity: contentOpacity }]}>
+            <View style={[styles.celebrationStatusIcon, !confirmed && styles.celebrationStatusIconPending]}>
+              <Ionicons name={confirmed ? 'checkmark' : 'time-outline'} size={22} color={confirmed ? colors.card : colors.redDark} />
+            </View>
+            <Text accessibilityLiveRegion="polite" style={[styles.celebrationTitle, compactHeight && styles.celebrationTitleCompact]}>{title}</Text>
+            <Text style={[styles.celebrationSubtitle, compactHeight && styles.celebrationSubtitleCompact]}>{subtitle}</Text>
+
+            <View style={styles.celebrationReservationCard}>
+              {restaurant?.logo || restaurant?.image ? (
+                <Image source={imageSource(restaurant.logo || restaurant.image)} style={styles.celebrationRestaurantImage} />
+              ) : (
+                <View style={styles.celebrationRestaurantFallback}>
+                  <Ionicons name="restaurant" size={22} color={colors.redDark} />
+                </View>
+              )}
+              <View style={styles.celebrationReservationCopy}>
+                <Text numberOfLines={1} style={styles.celebrationRestaurantName}>{restaurant?.name || reservation.restaurantName}</Text>
+                <Text style={styles.celebrationReservationMeta}>
+                  {formattedDate} • {reservation.time} • {reservation.partySize} pessoas
+                </Text>
+              </View>
+            </View>
+
+            <AppButton onPress={onViewReservations}>Ver minhas reservas</AppButton>
+            <Pressable accessibilityRole="button" onPress={onClose} style={styles.celebrationSecondaryAction}>
+              <Text style={styles.celebrationSecondaryText}>Continuar explorando</Text>
+            </Pressable>
+          </Animated.View>
+        </View>
+      </Animated.View>
+    </Modal>
+  );
+}
+
 function ReservationModal({ item, currentUser, reservations = [], onClose, onReserve, onWaitlist }) {
   const settings = reservationSettingsFor(item || {});
   const dates = useMemo(() => nextReservationDates(settings.advanceDays, 7), [item?.id, settings.advanceDays]);
@@ -7762,9 +8352,14 @@ function RestaurantModal({
                 <Pressable onPress={() => onReportContent({ type: 'restaurant', id: item.id, label: item.name, source: 'restaurant-detail' })} style={styles.floatButton}>
                   <Ionicons name="flag-outline" size={21} color={colors.ink} />
                 </Pressable>
-                <Pressable onPress={() => onFavorite(item.name)} style={styles.floatButton}>
-                  <Ionicons name={favorite ? 'heart' : 'heart-outline'} size={23} color={favorite ? colors.redDark : colors.ink} />
-                </Pressable>
+                <AnimatedFavoriteButton
+                  favorite={favorite}
+                  accessibilityLabel={favorite ? `Remover ${item.name} dos favoritos` : `Salvar ${item.name} nos favoritos`}
+                  onPress={() => onFavorite(item.name)}
+                  style={styles.floatButton}
+                  size={23}
+                  color={favorite ? colors.redDark : colors.ink}
+                />
               </View>
             </View>
             <View style={styles.detailAvatarWrap}>
@@ -8301,7 +8896,6 @@ function FeedProfileModal({ visible, profile, onClose, onOpenRestaurant, onRepor
   };
   const gridGap = 2;
   const tileSize = Math.floor((Math.min(width, 520) - 36 - gridGap * 2) / 3);
-  const totalLikes = posts.reduce((sum, post) => sum + Number(post.likes || 0), 0);
   const profileAvatar = String(profile.avatar || '').trim();
   const profileInitials = initialsForName(profile.name, 'D');
   return (
@@ -8330,8 +8924,8 @@ function FeedProfileModal({ visible, profile, onClose, onOpenRestaurant, onRepor
               <View style={styles.feedProfileStats}>
                 {[
                   ['Posts', posts.length],
-                  ['Seguidores', formatCompactCount(Number(profile.followers || totalLikes + 120))],
-                  ['Seguindo', formatCompactCount(Number(profile.following || 80))]
+                  ['Seguidores', profile.socialStatsLoaded ? formatCompactCount(Math.max(0, Number(profile.followers || 0))) : '—'],
+                  ['Seguindo', profile.socialStatsLoaded ? formatCompactCount(Math.max(0, Number(profile.following || 0))) : '—']
                 ].map(([label, value]) => (
                   <View key={label} style={styles.feedProfileStat}>
                     <Text style={styles.feedProfileStatValue}>{value}</Text>
@@ -9063,10 +9657,7 @@ const styles = StyleSheet.create({
   sprinkle: { width: 14, height: 5, borderRadius: 999 },
   homeHeadline: { marginTop: 18, marginBottom: -2 },
   homeHeadlineTitle: { color: colors.text, fontFamily: 'Baloo2_800ExtraBold', fontSize: 28, lineHeight: 31 },
-  underline: { width: 88, height: 5, borderRadius: 999, backgroundColor: colors.coral, marginTop: 2, transform: [{ rotate: '-3deg' }] }
-});
-
-Object.assign(styles, {
+  underline: { width: 88, height: 5, borderRadius: 999, backgroundColor: colors.coral, marginTop: 2, transform: [{ rotate: '-3deg' }] },
   header: { paddingTop: 4, paddingBottom: 12, backgroundColor: colors.bg },
   locationPill: { maxWidth: 128, height: 36, paddingHorizontal: 11, borderRadius: 999, flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.line },
   locationText: { color: colors.navy, fontFamily: 'Nunito_800ExtraBold', fontSize: 12 },
@@ -9114,10 +9705,7 @@ Object.assign(styles, {
   detailText: { color: colors.muted, fontSize: 14, lineHeight: 21, fontFamily: 'Nunito_400Regular' },
   detailAddress: { color: colors.bordeaux, fontSize: 13, fontFamily: 'Nunito_800ExtraBold' },
   fieldLabel: { color: colors.muted, fontSize: 12, fontFamily: 'Nunito_800ExtraBold' },
-  fieldInput: { minHeight: 46, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 13, color: colors.text, fontFamily: 'Nunito_700Bold' }
-});
-
-Object.assign(styles, {
+  fieldInput: { minHeight: 46, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 13, color: colors.text, fontFamily: 'Nunito_700Bold' },
   safe: { flex: 1, backgroundColor: colors.bg },
   adminSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 8 },
   adminSummaryCard: { width: '48%', minHeight: 82, borderRadius: 16, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, padding: 14, justifyContent: 'center' },
@@ -10358,6 +10946,53 @@ Object.assign(styles, {
   ownerProfilePreviewLogo: { width: 58, height: 58, borderRadius: 14, backgroundColor: colors.cream },
   ownerProfilePreviewCopy: { flex: 1, minWidth: 0, gap: 3 },
   ownerWorkspaceFooterActions: { marginTop: 18, paddingTop: 14, borderTopWidth: 1, borderTopColor: colors.line, gap: 8 },
+  favoriteButtonFill: { width: '100%', height: '100%', borderRadius: 99, alignItems: 'center', justifyContent: 'center' },
+  favoriteToastLayer: { ...StyleSheet.absoluteFillObject, zIndex: 90, alignItems: 'center', justifyContent: 'flex-start', paddingTop: Platform.OS === 'web' ? 22 : 48, paddingHorizontal: 14 },
+  favoriteToast: { width: '100%', maxWidth: 390, minHeight: 82, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(241,61,11,0.14)', backgroundColor: colors.card, paddingVertical: 9, paddingLeft: 7, paddingRight: 11, flexDirection: 'row', alignItems: 'center', gap: 8, shadowColor: '#5A2A1E', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 8 },
+  favoriteToastMascot: { width: 72, height: 72 },
+  favoriteToastCopy: { flex: 1, minWidth: 0 },
+  favoriteToastEyebrow: { color: colors.green, fontFamily: bodyFont, fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.7 },
+  favoriteToastTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 18, lineHeight: 21 },
+  favoriteToastText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, marginTop: 1 },
+  favoriteToastHeart: { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  celebrationBackdrop: { flex: 1, backgroundColor: 'rgba(30,20,16,0.62)', alignItems: 'center', justifyContent: 'center', padding: 18 },
+  celebrationCard: { width: '100%', maxWidth: 430, maxHeight: '94%', overflow: 'hidden', borderRadius: 30, backgroundColor: colors.bg, paddingHorizontal: 22, paddingTop: 14, paddingBottom: 20, alignItems: 'center' },
+  celebrationCardCompact: { borderRadius: 24, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10 },
+  celebrationGlow: { position: 'absolute', top: -145, width: 390, height: 390, borderRadius: 195, backgroundColor: '#FFD8CB', opacity: 0.68 },
+  celebrationMascotStage: { width: '100%', height: 260, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  celebrationMascotStageCompact: { height: 184 },
+  celebrationMascot: { width: 248, height: 248 },
+  celebrationMascotCompact: { width: 180, height: 180 },
+  celebrationParticle: { position: 'absolute', zIndex: 2, width: 36, height: 36, borderRadius: 18, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', shadowColor: '#8E3A25', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  celebrationParticleOne: { left: 28, top: 80 },
+  celebrationParticleTwo: { right: 35, top: 38 },
+  celebrationParticleThree: { left: 58, bottom: 31 },
+  celebrationParticleFour: { right: 24, bottom: 54 },
+  celebrationContent: { width: '100%', alignItems: 'center' },
+  celebrationStatusIcon: { width: 42, height: 42, marginTop: -8, marginBottom: 8, borderRadius: 21, backgroundColor: colors.green, alignItems: 'center', justifyContent: 'center', borderWidth: 4, borderColor: colors.bg },
+  celebrationStatusIconPending: { backgroundColor: '#FFF1E8', borderColor: colors.bg },
+  celebrationTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 30, lineHeight: 36, textAlign: 'center' },
+  celebrationTitleCompact: { fontSize: 25, lineHeight: 30 },
+  celebrationSubtitle: { maxWidth: 320, color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 18, textAlign: 'center', marginTop: 3, marginBottom: 15 },
+  celebrationSubtitleCompact: { fontSize: 10, lineHeight: 14, marginBottom: 9 },
+  celebrationReservationCard: { width: '100%', minHeight: 72, marginBottom: 14, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  celebrationRestaurantImage: { width: 52, height: 52, borderRadius: 12, backgroundColor: colors.cream },
+  celebrationRestaurantFallback: { width: 52, height: 52, borderRadius: 12, backgroundColor: '#FFF1E8', alignItems: 'center', justifyContent: 'center' },
+  celebrationReservationCopy: { flex: 1, minWidth: 0 },
+  celebrationRestaurantName: { color: colors.ink, fontFamily: bodyFont, fontSize: 14 },
+  celebrationReservationMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, marginTop: 2 },
+  celebrationSecondaryAction: { minHeight: 42, marginTop: 4, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 },
+  celebrationSecondaryText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 11 },
+  registrationCelebrationStage: { width: '100%', height: 252, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  registrationCelebrationStageCompact: { height: 178 },
+  registrationCelebrationMascot: { width: 238, height: 238 },
+  registrationCelebrationMascotCompact: { width: 172, height: 172 },
+  registrationCelebrationSpark: { position: 'absolute', zIndex: 2, width: 38, height: 38, borderRadius: 19, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', shadowColor: '#8E3A25', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
+  registrationCelebrationSparkOne: { left: 36, top: 52 },
+  registrationCelebrationSparkTwo: { right: 34, bottom: 48 },
+  registrationCelebrationRestaurant: { width: '100%', minHeight: 72, marginBottom: 14, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  registrationCelebrationStatus: { borderRadius: 99, backgroundColor: colors.greenSoft, paddingHorizontal: 8, paddingVertical: 5 },
+  registrationCelebrationStatusText: { color: colors.green, fontFamily: bodyFont, fontSize: 9 },
   reservationBackdrop: { flex: 1, backgroundColor: 'rgba(20,20,20,0.48)', justifyContent: 'flex-end' },
   reservationSheet: { width: '100%', maxWidth: 620, maxHeight: '94%', alignSelf: 'center', borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: colors.bg, paddingHorizontal: 18, paddingBottom: 20 },
   reservationHandle: { width: 42, height: 4, borderRadius: 2, backgroundColor: '#D8D3CE', alignSelf: 'center', marginTop: 9, marginBottom: 12 },
