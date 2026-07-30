@@ -62,11 +62,35 @@ test('finds restaurant address by street and by CEP', async ({ page }) => {
       }])
     });
   });
-  await page.route('**/nominatim.openstreetmap.org/search**', async (route) => {
+  await page.route('**/brasilapi.com.br/api/cep/v2/**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify([{ lat: '-20.81123', lon: '-49.37561' }])
+      body: JSON.stringify({
+        cep: '15015110',
+        state: 'SP',
+        city: 'São José do Rio Preto',
+        neighborhood: 'Boa Vista',
+        street: 'Rua Siqueira Campos',
+        location: { type: 'Point', coordinates: {} }
+      })
+    });
+  });
+  await page.route('**/photon.komoot.io/api/**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        type: 'FeatureCollection',
+        features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [-49.37561, -20.81123] }, properties: {} }]
+      })
+    });
+  });
+  await page.route('**/nominatim.openstreetmap.org/search**', async (route) => {
+    await route.fulfill({
+      status: 429,
+      contentType: 'application/json',
+      body: JSON.stringify({ message: 'Too many requests' })
     });
   });
 

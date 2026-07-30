@@ -1,6 +1,12 @@
 const DEFAULT_CITY = 'São José do Rio Preto';
 const DEFAULT_STATE = 'SP';
 
+function optionalCoordinate(value) {
+  if (value === null || value === undefined || value === '') return undefined;
+  const coordinate = Number(value);
+  return Number.isFinite(coordinate) ? coordinate : undefined;
+}
+
 export function onlyAddressDigits(value) {
   return String(value || '').replace(/\D/g, '');
 }
@@ -33,9 +39,11 @@ export function normalizeViaCepAddress(item = {}) {
     cep: formatCep(item.cep),
     street: String(item.street || item.logradouro || '').trim(),
     complement: String(item.complement || item.complemento || '').trim(),
-    district: String(item.district || item.bairro || '').trim(),
+    district: String(item.district || item.neighborhood || item.bairro || '').trim(),
     city: String(item.city || item.localidade || DEFAULT_CITY).trim(),
-    state: String(item.state || item.uf || DEFAULT_STATE).trim().toUpperCase()
+    state: String(item.state || item.uf || DEFAULT_STATE).trim().toUpperCase(),
+    latitude: optionalCoordinate(item.latitude),
+    longitude: optionalCoordinate(item.longitude)
   };
 }
 
@@ -54,13 +62,39 @@ export function formatAddressLabel(item, number = '') {
 export async function lookupAddressByCep(value, fetchImpl = fetch) {
   const cep = onlyAddressDigits(value);
   if (cep.length !== 8) return null;
-  const response = await fetchImpl(`https://viacep.com.br/ws/${cep}/json/`, {
-    headers: { Accept: 'application/json' }
-  });
-  if (!response.ok) throw new Error('cep_lookup_failed');
-  const result = await response.json();
-  if (result?.erro) return null;
-  return normalizeViaCepAddress(result);
+  let viaCepAddress = null;
+  try {
+    const response = await fetchImpl(`https://viacep.com.br/ws/${cep}/json/`, {
+      headers: { Accept: 'application/json' }
+    });
+    if (response.ok) {
+      const result = await response.json();
+      if (!result?.erro) viaCepAddress = normalizeViaCepAddress(result);
+    }
+  } catch (error) {
+    viaCepAddress = null;
+  }
+
+  try {
+    const response = await fetchImpl(`https://brasilapi.com.br/api/cep/v2/${cep}`, {
+      headers: { Accept: 'application/json' }
+    });
+    if (response.ok) {
+      const result = await response.json();
+      const latitude = optionalCoordinate(result?.location?.coordinates?.latitude);
+      const longitude = optionalCoordinate(result?.location?.coordinates?.longitude);
+      return normalizeViaCepAddress({
+        ...result,
+        ...(viaCepAddress || {}),
+        latitude: latitude ?? viaCepAddress?.latitude,
+        longitude: longitude ?? viaCepAddress?.longitude
+      });
+    }
+  } catch (error) {
+    // ViaCEP remains the address fallback when BrasilAPI is unavailable.
+  }
+
+  return viaCepAddress;
 }
 
 export async function searchAddresses(
