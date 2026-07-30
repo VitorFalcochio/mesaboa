@@ -114,4 +114,22 @@ test('finds restaurant address by street and by CEP', async ({ page }) => {
   await page.getByRole('button', { name: 'Buscar e confirmar endereço' }).click();
   await expect(page.getByText('Endereço confirmado', { exact: true })).toBeVisible();
   await expect(addressField).toHaveValue(/Rua Siqueira Campos, 230/);
+
+  await page.getByLabel('WhatsApp').fill('(17) 99999-9999');
+  await page.getByRole('button', { name: 'Continuar' }).click();
+  await expect(page.getByText('Etapa 3 de 4')).toBeVisible();
+
+  const addLater = page.getByRole('radio', { name: 'Adicionar depois' });
+  await expect(addLater).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByText('Tudo bem adicionar depois')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Adicionar item ao cardápio' })).toHaveCount(0);
+
+  await page.getByRole('radio', { name: 'Adicionar cardápio agora' }).click();
+  await expect(page.getByRole('button', { name: 'Adicionar item ao cardápio' })).toBeVisible();
+  await page.getByRole('button', { name: 'Adicionar item ao cardápio' }).click();
+  await expect(page.getByLabel('Item 1')).toBeVisible();
+
+  await addLater.click();
+  await expect(page.getByText('Tudo bem adicionar depois')).toBeVisible();
+  await expect(page.getByLabel('Item 1')).toHaveCount(0);
 });

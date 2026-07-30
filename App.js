@@ -996,6 +996,7 @@ function parseOpeningHours(value) {
 function restaurantToForm(item = {}) {
   return {
     ...item,
+    menuMode: item.menuMode || ((item.menuItems || []).length || item.menuPhoto ? 'now' : 'later'),
     photosText: (item.photos || []).map((photo) => photo.url).join('\n'),
     coverPhoto: item.coverPhoto || item.image || '',
     menuPhoto: item.menuPhoto || '',
@@ -3254,16 +3255,19 @@ export default function App() {
       },
       image: coverPhoto,
       coverPhoto,
-      menuPhoto: form.menuPhoto || '',
+      menuMode: form.menuMode || 'later',
+      menuPhoto: form.menuMode === 'now' ? (form.menuPhoto || '') : '',
       photos,
-      menuItems: (form.menuDraftItems || []).some((dish) => String(dish.name || '').trim())
-        ? form.menuDraftItems.filter((dish) => String(dish.name || '').trim()).map((dish, index) => ({
-          ...dish,
-          id: dish.id || `${Date.now()}-${index}`,
-          name: String(dish.name).trim(),
-          price: Number(String(dish.price || '').replace(',', '.')) || 0
-        }))
-        : parseMenuItems(form.menuText),
+      menuItems: form.menuMode !== 'now'
+        ? []
+        : (form.menuDraftItems || []).some((dish) => String(dish.name || '').trim())
+          ? form.menuDraftItems.filter((dish) => String(dish.name || '').trim()).map((dish, index) => ({
+            ...dish,
+            id: dish.id || `${Date.now()}-${index}`,
+            name: String(dish.name).trim(),
+            price: Number(String(dish.price || '').replace(',', '.')) || 0
+          }))
+          : parseMenuItems(form.menuText),
       openingHours: Object.values(hoursDraft).some(Boolean) ? hoursDraft : parseOpeningHours(form.openingHoursText),
       holidayClosures: parseHolidayClosures(form.holidayClosuresText),
       tags: parseList(form.tagsText),
@@ -3497,6 +3501,7 @@ export default function App() {
       adminManaged: Boolean(isAdmin),
       managedByAdminEmail: isAdmin ? currentUser?.email : '',
       price: '$$',
+      menuMode: 'later',
       menuDraftItems: [],
       openingHoursDraft: {},
       ...(savedDraft?.form || {}),
@@ -6820,7 +6825,7 @@ function postKey(restaurantId, postId) {
               <Ionicons name="images-outline" size={26} color={colors.redDark} />
               <View style={styles.registerHeroCopy}>
                 <Text style={styles.panelTitle}>Fotos e cardápio</Text>
-                <Text style={styles.panelText}>Uma boa capa e pratos bem descritos aumentam a confiança antes da visita.</Text>
+                <Text style={styles.panelText}>A foto de capa é obrigatória. Você decide se quer adicionar o cardápio agora ou depois.</Text>
               </View>
             </View>
             <View style={styles.registerSection}>
@@ -6858,45 +6863,92 @@ function postKey(restaurantId, postId) {
               ) : null}
             </View>
             <View style={styles.registerSection}>
-              <View style={styles.registerSectionHeaderBetween}>
-                <View style={styles.registerSectionHeader}>
-                  <Ionicons name="restaurant-outline" size={20} color={colors.redDark} />
-                  <Text style={styles.registerSectionTitle}>Itens do cardápio</Text>
-                </View>
-                <Pressable accessibilityRole="button" accessibilityLabel="Adicionar item ao cardápio" onPress={addMenuDraftItem} style={styles.registerAddButton}>
-                  <Ionicons name="add" size={18} color={colors.redDark} />
-                  <Text style={styles.registerAddButtonText}>Adicionar</Text>
-                </Pressable>
+              <View style={styles.registerSectionHeader}>
+                <Ionicons name="restaurant-outline" size={20} color={colors.redDark} />
+                <Text style={styles.registerSectionTitle}>Deseja adicionar o cardápio?</Text>
               </View>
-              {menuDraftItems.length ? menuDraftItems.map((dish, index) => (
-                <View key={dish.id || index} style={styles.registerMenuItem}>
-                  <Pressable onPress={() => pickRestaurantMenuItemImage(index)} style={styles.registerMenuPhoto}>
-                    {dish.image ? <Image source={imageSource(dish.image)} style={styles.registerMenuPhotoImage} /> : <Ionicons name="camera-outline" size={23} color={colors.redDark} />}
-                  </Pressable>
-                  <View style={styles.registerMenuFields}>
-                    <Field label={`Item ${index + 1}`} value={dish.name || ''} onChangeText={(value) => updateMenuDraftItem(index, 'name', value)} placeholder="Nome do prato" />
-                    <View style={styles.registerMenuInline}>
-                      <View style={styles.registerMenuInlineField}>
-                        <Field label="Categoria" value={dish.category || ''} onChangeText={(value) => updateMenuDraftItem(index, 'category', value)} placeholder="Principal" />
+              <Text style={styles.registerMenuChoiceIntro}>Essa escolha não impede o cadastro. Você poderá alterar o cardápio pelo painel do restaurante.</Text>
+              <View style={styles.registerMenuChoiceList}>
+                {[
+                  ['now', 'Adicionar cardápio agora', 'Cadastre pratos, preços, descrições e fotos.'],
+                  ['later', 'Adicionar depois', 'Finalize o restaurante agora e complete quando quiser.']
+                ].map(([value, title, description]) => {
+                  const selected = (form.menuMode || 'later') === value;
+                  return (
+                    <Pressable
+                      key={value}
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: selected }}
+                      aria-checked={selected}
+                      accessibilityLabel={title}
+                      onPress={() => setForm((current) => ({ ...current, menuMode: value }))}
+                      style={({ pressed }) => [styles.registerMenuChoice, selected && styles.registerMenuChoiceActive, pressed && styles.activePress]}
+                    >
+                      <View style={[styles.registerMenuChoiceRadio, selected && styles.registerMenuChoiceRadioActive]}>
+                        {selected ? <View style={styles.registerMenuChoiceRadioDot} /> : null}
                       </View>
-                      <View style={styles.registerMenuPriceField}>
-                        <Field label="Preço" value={String(dish.price || '')} onChangeText={(value) => updateMenuDraftItem(index, 'price', value)} placeholder="49,90" keyboardType="decimal-pad" />
+                      <View style={styles.registerMenuChoiceCopy}>
+                        <Text style={[styles.registerMenuChoiceTitle, selected && styles.registerMenuChoiceTitleActive]}>{title}</Text>
+                        <Text style={styles.registerMenuChoiceText}>{description}</Text>
                       </View>
-                    </View>
-                    <Field label="Descrição" value={dish.description || ''} onChangeText={(value) => updateMenuDraftItem(index, 'description', value)} placeholder="Ingredientes e acompanhamentos" multiline />
+                      <Ionicons name={value === 'now' ? 'add-circle-outline' : 'time-outline'} size={21} color={selected ? colors.redDark : colors.muted} />
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+            {form.menuMode === 'now' ? (
+              <View style={styles.registerSection}>
+                <View style={styles.registerSectionHeaderBetween}>
+                  <View style={styles.registerSectionHeader}>
+                    <Ionicons name="restaurant-outline" size={20} color={colors.redDark} />
+                    <Text style={styles.registerSectionTitle}>Itens do cardápio</Text>
                   </View>
-                  <Pressable onPress={() => setForm((current) => ({ ...current, menuDraftItems: (current.menuDraftItems || []).filter((_, itemIndex) => itemIndex !== index) }))} style={styles.registerMenuRemove}>
-                    <Ionicons name="trash-outline" size={18} color={colors.redDark} />
+                  <Pressable accessibilityRole="button" accessibilityLabel="Adicionar item ao cardápio" onPress={addMenuDraftItem} style={styles.registerAddButton}>
+                    <Ionicons name="add" size={18} color={colors.redDark} />
+                    <Text style={styles.registerAddButtonText}>Adicionar</Text>
                   </Pressable>
                 </View>
-              )) : (
-                <Pressable onPress={addMenuDraftItem} style={styles.registerMenuEmpty}>
-                  <Ionicons name="add-circle-outline" size={26} color={colors.redDark} />
-                  <Text style={styles.registerMenuEmptyTitle}>Adicionar primeiro prato</Text>
-                  <Text style={styles.registerMenuEmptyText}>O cardápio pode ser completado depois.</Text>
-                </Pressable>
-              )}
-            </View>
+                {menuDraftItems.length ? menuDraftItems.map((dish, index) => (
+                  <View key={dish.id || index} style={styles.registerMenuItem}>
+                    <Pressable onPress={() => pickRestaurantMenuItemImage(index)} style={styles.registerMenuPhoto}>
+                      {dish.image ? <Image source={imageSource(dish.image)} style={styles.registerMenuPhotoImage} /> : <Ionicons name="camera-outline" size={23} color={colors.redDark} />}
+                    </Pressable>
+                    <View style={styles.registerMenuFields}>
+                      <Field label={`Item ${index + 1}`} value={dish.name || ''} onChangeText={(value) => updateMenuDraftItem(index, 'name', value)} placeholder="Nome do prato" />
+                      <View style={styles.registerMenuInline}>
+                        <View style={styles.registerMenuInlineField}>
+                          <Field label="Categoria" value={dish.category || ''} onChangeText={(value) => updateMenuDraftItem(index, 'category', value)} placeholder="Principal" />
+                        </View>
+                        <View style={styles.registerMenuPriceField}>
+                          <Field label="Preço" value={String(dish.price || '')} onChangeText={(value) => updateMenuDraftItem(index, 'price', value)} placeholder="49,90" keyboardType="decimal-pad" />
+                        </View>
+                      </View>
+                      <Field label="Descrição" value={dish.description || ''} onChangeText={(value) => updateMenuDraftItem(index, 'description', value)} placeholder="Ingredientes e acompanhamentos" multiline />
+                    </View>
+                    <Pressable onPress={() => setForm((current) => ({ ...current, menuDraftItems: (current.menuDraftItems || []).filter((_, itemIndex) => itemIndex !== index) }))} style={styles.registerMenuRemove}>
+                      <Ionicons name="trash-outline" size={18} color={colors.redDark} />
+                    </Pressable>
+                  </View>
+                )) : (
+                  <Pressable onPress={addMenuDraftItem} style={styles.registerMenuEmpty}>
+                    <Ionicons name="add-circle-outline" size={26} color={colors.redDark} />
+                    <Text style={styles.registerMenuEmptyTitle}>Adicionar primeiro prato</Text>
+                    <Text style={styles.registerMenuEmptyText}>Comece com os itens mais pedidos da casa.</Text>
+                  </Pressable>
+                )}
+              </View>
+            ) : (
+              <View style={styles.registerMenuLaterNotice}>
+                <View style={styles.registerMenuLaterIcon}>
+                  <Ionicons name="checkmark" size={20} color={colors.green} />
+                </View>
+                <View style={styles.registerMenuLaterCopy}>
+                  <Text style={styles.registerMenuLaterTitle}>Tudo bem adicionar depois</Text>
+                  <Text style={styles.registerMenuLaterText}>O cadastro seguirá normalmente. Quando estiver pronto, abra o perfil no painel e publique o cardápio.</Text>
+                </View>
+              </View>
+            )}
           </>
         ) : null}
 
@@ -6965,7 +7017,9 @@ function postKey(restaurantId, postId) {
                   ['location-outline', form.address || 'Endereço pendente'],
                   ['logo-whatsapp', form.whatsapp || form.phone || 'Contato pendente'],
                   ['time-outline', `${completedDays} dias com horário`],
-                  ['restaurant-outline', `${menuDraftItems.filter((dish) => dish.name).length} itens no cardápio`]
+                  ['restaurant-outline', form.menuMode === 'now'
+                    ? `${menuDraftItems.filter((dish) => dish.name).length} itens no cardápio`
+                    : 'Cardápio será adicionado depois']
                 ].map(([icon, text]) => (
                   <View key={text} style={styles.registerPreviewDetail}>
                     <Ionicons name={icon} size={17} color={colors.redDark} />
@@ -10059,6 +10113,22 @@ Object.assign(styles, {
   registerPhotoText: { zIndex: 2, color: colors.redDark, fontFamily: bodyFont, fontSize: 10, textAlign: 'center' },
   registerAddButton: { minHeight: 34, borderRadius: 7, borderWidth: 1, borderColor: colors.redDark, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
   registerAddButtonText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 10 },
+  registerMenuChoiceIntro: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 15 },
+  registerMenuChoiceList: { gap: 8 },
+  registerMenuChoice: { minHeight: 72, borderRadius: 9, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  registerMenuChoiceActive: { borderColor: colors.redDark, backgroundColor: '#FFF7F3' },
+  registerMenuChoiceRadio: { width: 21, height: 21, borderRadius: 11, borderWidth: 2, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
+  registerMenuChoiceRadioActive: { borderColor: colors.redDark },
+  registerMenuChoiceRadioDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: colors.redDark },
+  registerMenuChoiceCopy: { flex: 1, minWidth: 0, gap: 2 },
+  registerMenuChoiceTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  registerMenuChoiceTitleActive: { color: colors.redDark },
+  registerMenuChoiceText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 14 },
+  registerMenuLaterNotice: { minHeight: 84, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(71,112,80,0.22)', backgroundColor: colors.greenSoft, padding: 12, marginBottom: 12, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  registerMenuLaterIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' },
+  registerMenuLaterCopy: { flex: 1, minWidth: 0, gap: 2 },
+  registerMenuLaterTitle: { color: colors.green, fontFamily: bodyFont, fontSize: 12 },
+  registerMenuLaterText: { color: colors.olive, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 15 },
   registerMenuItem: { paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.softLine, flexDirection: 'row', alignItems: 'flex-start', gap: 9, position: 'relative' },
   registerMenuPhoto: { width: 58, height: 58, borderRadius: 8, overflow: 'hidden', backgroundColor: '#FFF1EC', alignItems: 'center', justifyContent: 'center' },
   registerMenuPhotoImage: { width: '100%', height: '100%' },
