@@ -799,7 +799,9 @@ function coordinateForRestaurant(item, index = 0) {
 }
 
 function buildRestaurantGeocodeQuery(item) {
-  const parts = [item?.address, item?.district, item?.city || defaultAddressCity, item?.state || defaultAddressState, 'Brasil']
+  const street = [item?.addressStreet, item?.addressNumber].filter(Boolean).join(', ')
+    || String(item?.address || '').replace(/\s*·\s*/g, ', ');
+  const parts = [street, item?.district, item?.city || defaultAddressCity, item?.state || defaultAddressState, item?.cep, 'Brasil']
     .map((value) => String(value || '').trim())
     .filter(Boolean);
   return parts.join(', ');
@@ -871,7 +873,7 @@ async function geocodeRestaurantCoordinate(item) {
       const results = await Location.geocodeAsync(query);
       const first = results?.[0];
       if (Number.isFinite(first?.latitude) && Number.isFinite(first?.longitude)) {
-        return { latitude: first.latitude, longitude: first.longitude };
+        return { latitude: first.latitude, longitude: first.longitude, source: 'device' };
       }
     } catch (error) {
       // Fallback below.
@@ -879,7 +881,28 @@ async function geocodeRestaurantCoordinate(item) {
   }
 
   try {
-    const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${encodeURIComponent(query)}`, {
+    const response = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=1&lat=${rioPretoRegion.latitude}&lon=${rioPretoRegion.longitude}`, {
+      headers: { Accept: 'application/json' }
+    });
+    if (response.ok) {
+      const result = await response.json();
+      const coordinates = result?.features?.[0]?.geometry?.coordinates;
+      const longitude = Number(coordinates?.[0]);
+      const latitude = Number(coordinates?.[1]);
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        return { latitude, longitude, source: 'photon' };
+      }
+    }
+  } catch (error) {
+    // Nominatim and CEP coordinate fallbacks below.
+  }
+
+  try {
+    const street = [item?.addressStreet, item?.addressNumber].filter(Boolean).join(' ');
+    const structuredQuery = street
+      ? `street=${encodeURIComponent(street)}&city=${encodeURIComponent(item?.city || defaultAddressCity)}&state=${encodeURIComponent(item?.state || defaultAddressState)}&postalcode=${encodeURIComponent(item?.cep || '')}`
+      : `q=${encodeURIComponent(query)}`;
+    const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&${structuredQuery}`, {
       headers: {
         Accept: 'application/json',
         'User-Agent': 'Dine/1.0'
@@ -891,10 +914,16 @@ async function geocodeRestaurantCoordinate(item) {
     const latitude = Number(first?.lat);
     const longitude = Number(first?.lon);
     if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-      return { latitude, longitude };
+      return { latitude, longitude, source: 'nominatim' };
     }
   } catch (error) {
-    // Keep the seeded coordinate fallback.
+    // CEP coordinate fallback below.
+  }
+
+  const cepLatitude = Number(item?.cepLatitude);
+  const cepLongitude = Number(item?.cepLongitude);
+  if (Number.isFinite(cepLatitude) && Number.isFinite(cepLongitude)) {
+    return { latitude: cepLatitude, longitude: cepLongitude, source: 'cep' };
   }
 
   return null;
@@ -1776,6 +1805,8 @@ export default function App() {
             district: result.district || current.district,
             city: result.city,
             state: result.state,
+            cepLatitude: result.latitude ?? '',
+            cepLongitude: result.longitude ?? '',
             latitude: '',
             longitude: ''
           }));
@@ -3531,7 +3562,9 @@ export default function App() {
       longitude: String(coordinate.longitude)
     }));
     setRegisterErrors((current) => ({ ...current, address: '', addressNumber: '' }));
-    setRegisterAddressFeedback('Endereço e pin confirmados com sucesso.');
+    setRegisterAddressFeedback(coordinate.source === 'cep'
+      ? 'Endereço confirmado com a posição aproximada do CEP.'
+      : 'Endereço e pin confirmados com sucesso.');
     if (showResult) Alert.alert('Localização confirmada', 'O pin do restaurante foi posicionado no mapa.');
     return true;
   }
@@ -3551,6 +3584,8 @@ export default function App() {
       district: suggestion.district || form.district,
       city: suggestion.city,
       state: suggestion.state,
+      cepLatitude: suggestion.latitude ?? '',
+      cepLongitude: suggestion.longitude ?? '',
       latitude: '',
       longitude: ''
     };
@@ -6703,6 +6738,8 @@ function postKey(restaurantId, postId) {
                     addressComplement: '',
                     addressNumber: '',
                     cep: '',
+                    cepLatitude: '',
+                    cepLongitude: '',
                     latitude: '',
                     longitude: ''
                   }));
