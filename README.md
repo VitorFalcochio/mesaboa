@@ -74,6 +74,8 @@ Tabelas usadas pela camada do app:
 - `user_blocks`: bloqueios entre perfis.
 - `invites`, `invite_redemptions`: links e usos de convite.
 - `push_tokens`, `notification_queue`: notificacoes.
+- `app_reservations`: reservas nativas, quantidade de pessoas e status operacional.
+- `app_waitlist_entries`: lista de espera por restaurante, data e horario preferido.
 
 Campos importantes de `restaurants`:
 
@@ -84,6 +86,13 @@ Campos importantes de `restaurants`:
 
 Fluxo atual:
 
+- No cadastro, a pessoa escolhe entre conta de `user` e `restaurant_owner`.
+- Contas `user` entram na experiência de descoberta; contas `restaurant_owner` entram no cadastro/painel do estabelecimento.
+- Perfis antigos sem tipo explícito são tratados como `user` para manter compatibilidade.
+- O painel do dono possui navegação própria para visão geral, reservas, disponibilidade e perfil.
+- O restaurante configura agenda semanal, intervalo dos horários, capacidade por slot, tamanho máximo do grupo e confirmação automática.
+- Usuários podem reservar no detalhe do restaurante, acompanhar ou cancelar em `Perfil > Reservas` e entrar na lista de espera quando não houver capacidade.
+- Donos podem confirmar reservas, registrar chegada, concluir atendimento, cancelar e avisar a lista de espera.
 - Novo restaurante e salvo como `pending`.
 - Admin definido por `EXPO_PUBLIC_ADMIN_EMAIL` ou `EXPO_PUBLIC_ADMIN_EMAILS` pode publicar ou rejeitar na tela de aprovacoes.
 - Dados/contas demo so devem ser ativados localmente com `EXPO_PUBLIC_ENABLE_DEMO_DATA=true`.

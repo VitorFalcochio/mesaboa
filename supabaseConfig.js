@@ -933,6 +933,7 @@ export async function saveUserProfileToDb(user) {
     legacy_id: String(user.id),
     full_name: user.name,
     email: user.email,
+    account_type: user.accountType === 'restaurant_owner' ? 'restaurant_owner' : 'user',
     instagram: user.instagram || '',
     photo_url: user.photo || '',
     bio: user.bio || '',
@@ -940,6 +941,97 @@ export async function saveUserProfileToDb(user) {
     preferences: user.preferences || [],
     gamification: user.gamification || null,
     app_payload: cleanData(user),
+    updated_at: nowIso()
+  });
+}
+
+function normalizeReservationRow(row) {
+  const payload = row?.app_payload || {};
+  return {
+    ...payload,
+    id: row?.legacy_id || payload.id,
+    restaurantId: row?.restaurant_legacy_id || payload.restaurantId,
+    userId: row?.user_legacy_id || payload.userId,
+    date: row?.reservation_date || payload.date,
+    time: row?.reservation_time?.slice?.(0, 5) || payload.time,
+    partySize: Number(row?.party_size || payload.partySize || 1),
+    status: row?.status || payload.status || 'pending',
+    createdAt: row?.created_at || payload.createdAt
+  };
+}
+
+function normalizeWaitlistRow(row) {
+  const payload = row?.app_payload || {};
+  return {
+    ...payload,
+    id: row?.legacy_id || payload.id,
+    restaurantId: row?.restaurant_legacy_id || payload.restaurantId,
+    userId: row?.user_legacy_id || payload.userId,
+    date: row?.requested_date || payload.date,
+    time: row?.preferred_time?.slice?.(0, 5) || payload.time,
+    partySize: Number(row?.party_size || payload.partySize || 1),
+    status: row?.status || payload.status || 'waiting',
+    createdAt: row?.created_at || payload.createdAt
+  };
+}
+
+export async function fetchReservationStateFromDb({ userId = '', restaurantIds = [] } = {}) {
+  const client = requireClient();
+  if (!client || (!userId && !restaurantIds.length)) return null;
+  const reservationQueries = [];
+  const waitlistQueries = [];
+  if (userId) {
+    reservationQueries.push(client.from('app_reservations').select('*').eq('user_legacy_id', String(userId)).limit(300));
+    waitlistQueries.push(client.from('app_waitlist_entries').select('*').eq('user_legacy_id', String(userId)).limit(300));
+  }
+  if (restaurantIds.length) {
+    const ids = restaurantIds.map(String);
+    reservationQueries.push(client.from('app_reservations').select('*').in('restaurant_legacy_id', ids).limit(500));
+    waitlistQueries.push(client.from('app_waitlist_entries').select('*').in('restaurant_legacy_id', ids).limit(500));
+  }
+  const [reservationResults, waitlistResults] = await Promise.all([
+    Promise.all(reservationQueries),
+    Promise.all(waitlistQueries)
+  ]);
+  reservationResults.forEach(({ error }) => throwIfError(error));
+  waitlistResults.forEach(({ error }) => throwIfError(error));
+  const reservations = reservationResults
+    .flatMap(({ data }) => data || [])
+    .map(normalizeReservationRow)
+    .reduce((items, item) => items.some((existing) => existing.id === item.id) ? items : [...items, item], []);
+  const waitlist = waitlistResults
+    .flatMap(({ data }) => data || [])
+    .map(normalizeWaitlistRow)
+    .reduce((items, item) => items.some((existing) => existing.id === item.id) ? items : [...items, item], []);
+  return { reservations, waitlist };
+}
+
+export async function saveReservationToDb(reservation) {
+  if (!reservation?.id) return;
+  await upsertByLegacyId('app_reservations', {
+    legacy_id: String(reservation.id),
+    restaurant_legacy_id: String(reservation.restaurantId),
+    user_legacy_id: String(reservation.userId),
+    reservation_date: reservation.date,
+    reservation_time: reservation.time,
+    party_size: Number(reservation.partySize || 1),
+    status: reservation.status || 'pending',
+    app_payload: cleanData(reservation),
+    updated_at: nowIso()
+  });
+}
+
+export async function saveWaitlistEntryToDb(entry) {
+  if (!entry?.id) return;
+  await upsertByLegacyId('app_waitlist_entries', {
+    legacy_id: String(entry.id),
+    restaurant_legacy_id: String(entry.restaurantId),
+    user_legacy_id: String(entry.userId),
+    requested_date: entry.date,
+    preferred_time: entry.time || null,
+    party_size: Number(entry.partySize || 1),
+    status: entry.status || 'waiting',
+    app_payload: cleanData(entry),
     updated_at: nowIso()
   });
 }
@@ -958,6 +1050,8 @@ export async function deleteUserAccountInDb(user) {
     client.from('user_blocks').delete().eq('user_legacy_id', userId),
     client.from('push_tokens').delete().eq('user_legacy_id', userId),
     client.from('invites').update({ status: 'deleted', updated_at: nowIso() }).eq('owner_legacy_id', userId),
+    client.from('app_reservations').delete().eq('user_legacy_id', userId),
+    client.from('app_waitlist_entries').delete().eq('user_legacy_id', userId),
     client.from('app_profiles').delete().eq('legacy_id', userId)
   ]);
   results.forEach(({ error }) => throwIfError(error));

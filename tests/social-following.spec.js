@@ -4,6 +4,7 @@ async function createLocalAccount(page) {
   await page.goto('/');
   await page.getByText('Pular', { exact: true }).click();
   await page.getByRole('tab', { name: 'Criar conta' }).click();
+  await page.getByRole('radio', { name: 'Conta de Usuário' }).click();
   await page.getByLabel('Nome').fill('Explorador Social');
   await page.getByLabel('E-mail').fill(`social-${Date.now()}@dine.test`);
   await page.locator('input[aria-label="Senha"]').fill('senha-segura-123');
