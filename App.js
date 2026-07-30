@@ -89,6 +89,16 @@ import {
   tabs
 } from './src/data/appData';
 import {
+  defaultAddressCity,
+  defaultAddressState,
+  extractAddressNumber,
+  formatAddressLabel,
+  formatCep,
+  lookupAddressByCep,
+  onlyAddressDigits,
+  searchAddresses
+} from './src/addressLookup';
+import {
   nextReservationDates,
   reservationSettingsFor,
   reservationSlotsForDate,
@@ -789,7 +799,7 @@ function coordinateForRestaurant(item, index = 0) {
 }
 
 function buildRestaurantGeocodeQuery(item) {
-  const parts = [item?.name, item?.address, item?.district, 'São José do Rio Preto', 'SP', 'Brasil']
+  const parts = [item?.address, item?.district, item?.city || defaultAddressCity, item?.state || defaultAddressState, 'Brasil']
     .map((value) => String(value || '').trim())
     .filter(Boolean);
   return parts.join(', ');
@@ -1470,6 +1480,10 @@ export default function App() {
   const [registerStep, setRegisterStep] = useState(0);
   const [registerErrors, setRegisterErrors] = useState({});
   const [registerLocating, setRegisterLocating] = useState(false);
+  const [registerAddressSuggestions, setRegisterAddressSuggestions] = useState([]);
+  const [registerAddressSearching, setRegisterAddressSearching] = useState(false);
+  const [registerAddressFeedback, setRegisterAddressFeedback] = useState('');
+  const registerAddressRequestRef = useRef(0);
   const [registerDraftSavedAt, setRegisterDraftSavedAt] = useState(null);
   const [hydrated, setHydrated] = useState(false);
   const [favoriteSegment, setFavoriteSegment] = useState('Salvos');
@@ -1721,6 +1735,72 @@ export default function App() {
     if (!hydrated) return;
     AsyncStorage.setItem(storageKeys.waitlist, JSON.stringify(waitlistEntries));
   }, [hydrated, waitlistEntries]);
+
+  useEffect(() => {
+    if (activeScreen?.name !== 'restaurantRegister' || registerStep !== 1 || form.addressLookupReady) {
+      setRegisterAddressSuggestions([]);
+      setRegisterAddressSearching(false);
+      return undefined;
+    }
+    const queryValue = String(form.addressQuery ?? form.address ?? '').trim();
+    const cepDigits = onlyAddressDigits(queryValue);
+    const isCepQuery = cepDigits.length === 8 && /^[\d\s-]+$/.test(queryValue);
+    if (!isCepQuery && queryValue.length < 3) {
+      setRegisterAddressSuggestions([]);
+      setRegisterAddressSearching(false);
+      return undefined;
+    }
+    const requestId = registerAddressRequestRef.current + 1;
+    registerAddressRequestRef.current = requestId;
+    const timeout = setTimeout(async () => {
+      setRegisterAddressSearching(true);
+      try {
+        if (isCepQuery) {
+          const result = await lookupAddressByCep(queryValue);
+          if (registerAddressRequestRef.current !== requestId) return;
+          if (!result) {
+            setRegisterAddressSuggestions([]);
+            setRegisterAddressFeedback('CEP não encontrado. Confira os oito números.');
+            return;
+          }
+          const address = formatAddressLabel(result);
+          setForm((current) => ({
+            ...current,
+            address,
+            addressQuery: address,
+            addressLookupReady: true,
+            addressStreet: result.street,
+            addressComplement: result.complement,
+            addressNumber: '',
+            cep: result.cep,
+            district: result.district || current.district,
+            city: result.city,
+            state: result.state,
+            latitude: '',
+            longitude: ''
+          }));
+          setRegisterAddressSuggestions([]);
+          setRegisterAddressFeedback('CEP encontrado. Agora informe o número do restaurante.');
+          setRegisterErrors((current) => ({ ...current, address: '', addressNumber: '' }));
+          return;
+        }
+        const results = await searchAddresses(queryValue, {
+          city: form.city || defaultAddressCity,
+          state: form.state || defaultAddressState
+        });
+        if (registerAddressRequestRef.current !== requestId) return;
+        setRegisterAddressSuggestions(results);
+        setRegisterAddressFeedback(results.length ? 'Selecione a opção correta para confirmar o endereço.' : 'Nenhuma opção encontrada. Você ainda pode confirmar o texto digitado.');
+      } catch (error) {
+        if (registerAddressRequestRef.current !== requestId) return;
+        setRegisterAddressSuggestions([]);
+        setRegisterAddressFeedback('A busca automática está indisponível. Você ainda pode confirmar o endereço digitado.');
+      } finally {
+        if (registerAddressRequestRef.current === requestId) setRegisterAddressSearching(false);
+      }
+    }, isCepQuery ? 300 : 500);
+    return () => clearTimeout(timeout);
+  }, [activeScreen?.name, form.address, form.addressLookupReady, form.addressQuery, form.city, form.state, registerStep]);
 
   useEffect(() => {
     if (!hydrated || activeScreen?.name !== 'restaurantRegister' || editingRestaurant || !currentUser) return undefined;
@@ -3130,6 +3210,10 @@ export default function App() {
       instagram: form.instagram || '',
       reservationUrl: form.reservationUrl || '',
       address: form.address || '',
+      cep: form.cep || '',
+      addressNumber: form.addressNumber || '',
+      city: form.city || defaultAddressCity,
+      state: form.state || defaultAddressState,
       latitude: parseOptionalCoordinate(form.latitude),
       longitude: parseOptionalCoordinate(form.longitude),
       geocodedAddress: {
@@ -3357,6 +3441,8 @@ export default function App() {
     setForm(restaurantToForm(item));
     setRegisterStep(0);
     setRegisterErrors({});
+    setRegisterAddressSuggestions([]);
+    setRegisterAddressFeedback('');
     navigateTo('restaurantRegister');
   }
 
@@ -3387,6 +3473,8 @@ export default function App() {
     });
     setRegisterStep(Math.max(0, Math.min(3, Number(savedDraft?.step || 0))));
     setRegisterErrors({});
+    setRegisterAddressSuggestions([]);
+    setRegisterAddressFeedback('');
     setRegisterDraftSavedAt(savedDraft?.savedAt ? new Date(savedDraft.savedAt).getTime() : null);
     navigateTo('restaurantRegister');
   }
@@ -3401,6 +3489,7 @@ export default function App() {
     }
     if (step === 1) {
       if (!String(form.address || '').trim()) errors.address = 'Informe o endereço completo.';
+      if (form.addressLookupReady && !String(form.addressNumber || '').trim()) errors.addressNumber = 'Informe o número do restaurante.';
       if (!String(form.whatsapp || form.phone || '').trim()) errors.contact = 'Informe WhatsApp ou telefone.';
     }
     if (step === 2 && !(form.coverPhoto || form.image)) {
@@ -3418,16 +3507,21 @@ export default function App() {
     return !Object.keys(errors).length;
   }
 
-  async function locateRestaurantAddress(showResult = true) {
-    if (!String(form.address || '').trim()) {
+  async function locateRestaurantAddress(showResult = true, addressCandidate = form) {
+    if (!String(addressCandidate.address || '').trim()) {
       setRegisterErrors((current) => ({ ...current, address: 'Digite o endereço antes de localizar no mapa.' }));
       return false;
     }
+    if (addressCandidate.addressLookupReady && !String(addressCandidate.addressNumber || '').trim()) {
+      setRegisterErrors((current) => ({ ...current, addressNumber: 'Informe o número do restaurante.' }));
+      return false;
+    }
     setRegisterLocating(true);
-    const coordinate = await geocodeRestaurantCoordinate(form);
+    const coordinate = await geocodeRestaurantCoordinate(addressCandidate);
     setRegisterLocating(false);
     if (!coordinate) {
       setRegisterErrors((current) => ({ ...current, address: 'Não encontramos esse endereço. Inclua número, bairro e cidade.' }));
+      setRegisterAddressFeedback('Não foi possível posicionar o pin. Revise o endereço ou escolha outra opção.');
       if (showResult) Alert.alert('Endereço não encontrado', 'Confira rua, número, bairro e cidade antes de tentar novamente.');
       return false;
     }
@@ -3436,9 +3530,66 @@ export default function App() {
       latitude: String(coordinate.latitude),
       longitude: String(coordinate.longitude)
     }));
-    setRegisterErrors((current) => ({ ...current, address: '' }));
+    setRegisterErrors((current) => ({ ...current, address: '', addressNumber: '' }));
+    setRegisterAddressFeedback('Endereço e pin confirmados com sucesso.');
     if (showResult) Alert.alert('Localização confirmada', 'O pin do restaurante foi posicionado no mapa.');
     return true;
+  }
+
+  async function selectRestaurantAddressSuggestion(suggestion) {
+    const number = extractAddressNumber(form.addressQuery || form.address) || String(form.addressNumber || '').trim();
+    const address = formatAddressLabel(suggestion, number);
+    const nextForm = {
+      ...form,
+      address,
+      addressQuery: address,
+      addressLookupReady: true,
+      addressStreet: suggestion.street,
+      addressComplement: suggestion.complement,
+      addressNumber: number,
+      cep: suggestion.cep,
+      district: suggestion.district || form.district,
+      city: suggestion.city,
+      state: suggestion.state,
+      latitude: '',
+      longitude: ''
+    };
+    setForm(nextForm);
+    setRegisterAddressSuggestions([]);
+    setRegisterErrors((current) => ({ ...current, address: '', addressNumber: '' }));
+    if (!number) {
+      setRegisterAddressFeedback('Endereço selecionado. Informe o número do restaurante.');
+      return;
+    }
+    setRegisterAddressFeedback('Endereço selecionado. Confirmando o pin no mapa...');
+    await locateRestaurantAddress(false, nextForm);
+  }
+
+  function updateRestaurantAddressNumber(value) {
+    setForm((current) => ({
+      ...current,
+      addressNumber: value,
+      address: formatAddressLabel({
+        street: current.addressStreet,
+        complement: current.addressComplement,
+        district: current.district,
+        city: current.city,
+        state: current.state,
+        cep: current.cep
+      }, value),
+      addressQuery: formatAddressLabel({
+        street: current.addressStreet,
+        complement: current.addressComplement,
+        district: current.district,
+        city: current.city,
+        state: current.state,
+        cep: current.cep
+      }, value),
+      latitude: '',
+      longitude: ''
+    }));
+    setRegisterErrors((current) => ({ ...current, address: '', addressNumber: '' }));
+    setRegisterAddressFeedback(value.trim() ? 'Número adicionado. Confirme para posicionar o pin.' : 'Informe o número do restaurante.');
   }
 
   async function advanceRestaurantRegistration() {
@@ -6539,25 +6690,82 @@ function postKey(restaurantId, postId) {
             </View>
             <View style={styles.registerSection}>
               <Field
-                label="Endereço completo"
-                value={form.address || ''}
+                label="CEP ou endereço"
+                value={form.addressQuery ?? form.address ?? ''}
                 error={registerErrors.address}
                 onChangeText={(value) => {
-                  setForm((current) => ({ ...current, address: value, latitude: '', longitude: '' }));
-                  setRegisterErrors((current) => ({ ...current, address: '' }));
+                  setForm((current) => ({
+                    ...current,
+                    address: value,
+                    addressQuery: value,
+                    addressLookupReady: false,
+                    addressStreet: '',
+                    addressComplement: '',
+                    addressNumber: '',
+                    cep: '',
+                    latitude: '',
+                    longitude: ''
+                  }));
+                  setRegisterAddressFeedback('');
+                  setRegisterErrors((current) => ({ ...current, address: '', addressNumber: '' }));
                 }}
-                placeholder="Rua, número, bairro, cidade e estado"
+                placeholder="Ex.: 15015-110 ou Rua Voluntários, 3745"
+                autoCapitalize="words"
               />
-              <Pressable accessibilityRole="button" accessibilityLabel="Confirmar endereço no mapa" onPress={() => locateRestaurantAddress(true)} disabled={registerLocating} style={styles.registerLocateButton}>
+              {registerAddressSearching ? (
+                <View style={styles.registerAddressSearching}>
+                  <Ionicons name="search-outline" size={15} color={colors.redDark} />
+                  <Text style={styles.registerAddressSearchingText}>Buscando endereços...</Text>
+                </View>
+              ) : null}
+              {registerAddressSuggestions.length ? (
+                <View accessibilityLabel="Opções de endereço" style={styles.registerAddressSuggestions}>
+                  {registerAddressSuggestions.map((suggestion) => (
+                    <Pressable
+                      key={`${suggestion.cep}-${suggestion.street}-${suggestion.district}`}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Usar endereço ${formatAddressLabel(suggestion, extractAddressNumber(form.addressQuery || form.address))}`}
+                      onPress={() => selectRestaurantAddressSuggestion(suggestion)}
+                      style={({ pressed }) => [styles.registerAddressSuggestion, pressed && styles.activePress]}
+                    >
+                      <View style={styles.registerAddressSuggestionIcon}>
+                        <Ionicons name="location-outline" size={18} color={colors.redDark} />
+                      </View>
+                      <View style={styles.registerAddressSuggestionCopy}>
+                        <Text style={styles.registerAddressSuggestionTitle}>{suggestion.street}{extractAddressNumber(form.addressQuery || form.address) ? `, ${extractAddressNumber(form.addressQuery || form.address)}` : ''}</Text>
+                        <Text style={styles.registerAddressSuggestionText}>{[suggestion.district, `${suggestion.city} - ${suggestion.state}`, suggestion.cep].filter(Boolean).join(' · ')}</Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={17} color={colors.muted} />
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
+              {form.addressLookupReady ? (
+                <Field
+                  label="Número"
+                  value={form.addressNumber || ''}
+                  error={registerErrors.addressNumber}
+                  onChangeText={updateRestaurantAddressNumber}
+                  placeholder="Ex.: 3745"
+                  keyboardType="numbers-and-punctuation"
+                />
+              ) : null}
+              {registerAddressFeedback ? (
+                <Text style={[styles.registerAddressFeedback, parseOptionalCoordinate(form.latitude) && parseOptionalCoordinate(form.longitude) && styles.registerAddressFeedbackSuccess]}>
+                  {registerAddressFeedback}
+                </Text>
+              ) : null}
+              <Pressable accessibilityRole="button" accessibilityLabel="Buscar e confirmar endereço" onPress={() => locateRestaurantAddress(true)} disabled={registerLocating || registerAddressSearching} style={[styles.registerLocateButton, (registerLocating || registerAddressSearching) && styles.registerLocateButtonDisabled]}>
                 <Ionicons name={registerLocating ? 'hourglass-outline' : 'map-outline'} size={19} color={colors.card} />
-                <Text style={styles.registerLocateButtonText}>{registerLocating ? 'Localizando...' : 'Confirmar endereço no mapa'}</Text>
+                <Text style={styles.registerLocateButtonText}>{registerLocating ? 'Confirmando pin...' : 'Buscar e confirmar endereço'}</Text>
               </Pressable>
               {parseOptionalCoordinate(form.latitude) && parseOptionalCoordinate(form.longitude) ? (
                 <View style={styles.registerLocationConfirmed}>
                   <Ionicons name="checkmark-circle" size={21} color={colors.green} />
                   <View style={styles.registerLocationConfirmedCopy}>
-                    <Text style={styles.registerLocationConfirmedTitle}>Pin confirmado</Text>
-                    <Text style={styles.registerLocationConfirmedText}>{Number(form.latitude).toFixed(5)}, {Number(form.longitude).toFixed(5)}</Text>
+                    <Text style={styles.registerLocationConfirmedTitle}>Endereço confirmado</Text>
+                    <Text style={styles.registerLocationConfirmedText}>{form.address}</Text>
+                    <Text style={styles.registerLocationCoordinates}>{Number(form.latitude).toFixed(5)}, {Number(form.longitude).toFixed(5)}</Text>
                   </View>
                 </View>
               ) : null}
@@ -9788,12 +9996,24 @@ Object.assign(styles, {
   registerChoiceActive: { backgroundColor: colors.redDark, borderColor: colors.redDark },
   registerChoiceText: { color: colors.ink, fontFamily: bodyFont, fontSize: 11 },
   registerChoiceTextActive: { color: colors.card },
+  registerAddressSearching: { minHeight: 28, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 2 },
+  registerAddressSearchingText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 11 },
+  registerAddressSuggestions: { overflow: 'hidden', borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
+  registerAddressSuggestion: { minHeight: 62, paddingHorizontal: 10, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.softLine, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  registerAddressSuggestionIcon: { width: 34, height: 34, borderRadius: 9, backgroundColor: '#FFF1EC', alignItems: 'center', justifyContent: 'center' },
+  registerAddressSuggestionCopy: { flex: 1, minWidth: 0, gap: 2 },
+  registerAddressSuggestionTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  registerAddressSuggestionText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 14 },
+  registerAddressFeedback: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 15 },
+  registerAddressFeedbackSuccess: { color: colors.green, fontFamily: bodyFont },
   registerLocateButton: { minHeight: 44, borderRadius: 8, backgroundColor: colors.ink, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  registerLocateButtonDisabled: { opacity: 0.62 },
   registerLocateButtonText: { color: colors.card, fontFamily: bodyFont, fontSize: 12 },
   registerLocationConfirmed: { minHeight: 54, borderRadius: 8, backgroundColor: colors.greenSoft, padding: 10, flexDirection: 'row', alignItems: 'center', gap: 9 },
   registerLocationConfirmedCopy: { flex: 1, minWidth: 0 },
   registerLocationConfirmedTitle: { color: colors.green, fontFamily: bodyFont, fontSize: 12 },
   registerLocationConfirmedText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, marginTop: 1 },
+  registerLocationCoordinates: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9, marginTop: 3 },
   registerPhotoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   registerPhotoCard: { width: '48%', minHeight: 126, borderRadius: 8, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(241,61,11,0.38)', backgroundColor: '#FFF7F3', alignItems: 'center', justifyContent: 'center', gap: 4, padding: 9, overflow: 'hidden' },
   registerPhotoCardError: { borderColor: colors.redDark, borderWidth: 2 },
