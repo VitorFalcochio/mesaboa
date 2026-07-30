@@ -5,6 +5,7 @@ export const seedUsers = [
     id: 'vitor-demo',
     name: 'Vitor',
     email: 'vitorfalcochio@gmail.com',
+    accountType: 'user',
     password: '@Vitor091107',
     gamification: {
       points: 120,

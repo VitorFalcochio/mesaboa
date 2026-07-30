@@ -1,5 +1,15 @@
 # Changelog da Revisao
 
+## Reservas e experiência do restaurante
+
+- Cadastro agora distingue conta de usuário e dono de restaurante.
+- Dono recebe um workspace próprio com visão geral, reservas, disponibilidade e perfil.
+- Restaurantes configuram agenda semanal, intervalo, capacidade e confirmação automática.
+- Usuários fazem reservas nativas e acompanham confirmações em `Minhas reservas`.
+- Horários sem capacidade oferecem entrada em lista de espera.
+- Painel permite confirmar, registrar chegada, concluir ou cancelar reservas e avisar clientes em espera.
+- Reservas e lista de espera persistem localmente e possuem tabelas de compatibilidade no Supabase.
+
 ## Corrigido
 
 - Fotos do feed agora abrem o detalhe da publicacao.

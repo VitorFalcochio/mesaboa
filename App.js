@@ -41,6 +41,7 @@ import {
   fetchProfileSocialStatsFromDb,
   fetchRestaurantsFromDb,
   fetchSocialStateFromDb,
+  fetchReservationStateFromDb,
   supabaseReady,
   addFeedCommentToDb,
   blockAccountInDb,
@@ -57,6 +58,8 @@ import {
   saveFavoritesToDb,
   saveReviewToDb,
   saveRestaurantToDb,
+  saveReservationToDb,
+  saveWaitlistEntryToDb,
   saveUserProfileToDb,
   seedRestaurantsIfEmpty,
   uploadFeedPhoto,
@@ -85,6 +88,15 @@ import {
   seedUsers,
   tabs
 } from './src/data/appData';
+import {
+  nextReservationDates,
+  reservationSettingsFor,
+  reservationSlotsForDate,
+  reservationStatusColor,
+  reservationStatusLabel,
+  reservationWeekDays,
+  waitlistStatusLabel
+} from './src/reservations';
 
 const colors = {
   bg: '#FFFDF9',
@@ -335,7 +347,9 @@ const storageKeys = {
   feedPosts: 'dineFeedPostsRN',
   feedReactions: 'dineFeedReactionsRN',
   onboardingSeen: 'dineOnboardingSeenRN',
-  restaurantDraft: 'dineRestaurantDraftRN'
+  restaurantDraft: 'dineRestaurantDraftRN',
+  reservations: 'dineReservationsRN',
+  waitlist: 'dineWaitlistRN'
 };
 const restaurantCategoryOptions = ['Brasileira', 'Hamburgueria', 'Italiana', 'Japonesa', 'Pizzaria', 'Cafeteria', 'Bar', 'Doces'];
 const restaurantPriceOptions = ['$', '$$', '$$$', '$$$$'];
@@ -496,17 +510,24 @@ function mergeSeedRestaurantMenus(items) {
   });
 }
 
+function normalizeAccountType(value) {
+  return value === 'restaurant_owner' ? 'restaurant_owner' : 'user';
+}
+
 function normalizeDemoAccount(user) {
-  if (!demoDataEnabled) return user;
-  if (!user || normalize(user.email) !== normalize(demoAccountEmail)) return user;
+  if (!user) return user;
+  const normalizedUser = { ...user, accountType: normalizeAccountType(user.accountType) };
+  if (!demoDataEnabled) return normalizedUser;
+  if (normalize(normalizedUser.email) !== normalize(demoAccountEmail)) return normalizedUser;
   const demoSeed = seedUsers.find((item) => normalize(item.email) === normalize(demoAccountEmail));
   return {
     ...(demoSeed || {}),
-    ...user,
+    ...normalizedUser,
     id: demoAccountId,
     name: demoAccountName,
     email: demoAccountEmail,
-    gamification: mergeGamification(user.gamification || demoSeed?.gamification)
+    accountType: normalizeAccountType(normalizedUser.accountType || demoSeed?.accountType),
+    gamification: mergeGamification(normalizedUser.gamification || demoSeed?.gamification)
   };
 }
 
@@ -1466,16 +1487,22 @@ export default function App() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [mapInteracting, setMapInteracting] = useState(false);
   const [ownerRestaurants, setOwnerRestaurants] = useState([]);
+  const [ownerPanelTab, setOwnerPanelTab] = useState('Visão geral');
+  const [ownerRestaurantId, setOwnerRestaurantId] = useState('');
   const [pendingRestaurants, setPendingRestaurants] = useState([]);
   const [editingRestaurant, setEditingRestaurant] = useState(null);
   const [selectedPanelPost, setSelectedPanelPost] = useState(null);
   const [panelPostLikes, setPanelPostLikes] = useState({});
   const isAdmin = Boolean(currentUser?.email && isAdminEmail(currentUser.email));
+  const isRestaurantOwner = normalizeAccountType(currentUser?.accountType) === 'restaurant_owner';
   const appAppearance = useMemo(() => resolveAppearance(currentUser?.settings, systemColorScheme), [currentUser?.settings, systemColorScheme]);
   const copy = settingsCopy[currentUser?.settings?.language || 'pt-BR'] || settingsCopy['pt-BR'];
   const [clockTick, setClockTick] = useState(Date.now());
   const [reviewsByRestaurant, setReviewsByRestaurant] = useState({});
   const [reviewDraft, setReviewDraft] = useState({ rating: '5', comment: '' });
+  const [reservations, setReservations] = useState([]);
+  const [waitlistEntries, setWaitlistEntries] = useState([]);
+  const [reservationRestaurant, setReservationRestaurant] = useState(null);
   const [feedReactions, setFeedReactions] = useState({});
   const [feedCommentDrafts, setFeedCommentDrafts] = useState({});
   const [feedPhotoIndexes, setFeedPhotoIndexes] = useState({});
@@ -1575,14 +1602,16 @@ export default function App() {
   useEffect(() => {
     async function load() {
       try {
-        const [storedRestaurants, storedFavorites, storedUsers, storedCurrentUser, storedOnboardingSeen, storedFeedPosts, storedFeedReactions] = await Promise.all([
+        const [storedRestaurants, storedFavorites, storedUsers, storedCurrentUser, storedOnboardingSeen, storedFeedPosts, storedFeedReactions, storedReservations, storedWaitlist] = await Promise.all([
           AsyncStorage.getItem(storageKeys.restaurants),
           AsyncStorage.getItem(storageKeys.favorites),
           AsyncStorage.getItem(storageKeys.users),
           AsyncStorage.getItem(storageKeys.currentUser),
           AsyncStorage.getItem(storageKeys.onboardingSeen),
           AsyncStorage.getItem(storageKeys.feedPosts),
-          AsyncStorage.getItem(storageKeys.feedReactions)
+          AsyncStorage.getItem(storageKeys.feedReactions),
+          AsyncStorage.getItem(storageKeys.reservations),
+          AsyncStorage.getItem(storageKeys.waitlist)
         ]);
         const storedRestaurantCoordinates = await AsyncStorage.getItem(storageKeys.restaurantCoordinates);
         const localUser = storedCurrentUser ? normalizeDemoAccount(JSON.parse(storedCurrentUser)) : null;
@@ -1594,6 +1623,8 @@ export default function App() {
         if (storedFavorites) setFavorites(JSON.parse(storedFavorites));
         const localFeedPosts = storedFeedPosts ? JSON.parse(storedFeedPosts) : [];
         const localFeedReactions = storedFeedReactions ? JSON.parse(storedFeedReactions) : {};
+        if (storedReservations) setReservations(JSON.parse(storedReservations));
+        if (storedWaitlist) setWaitlistEntries(JSON.parse(storedWaitlist));
         if (localFeedPosts.length) setCustomFeedPosts(localFeedPosts);
         if (Object.keys(localFeedReactions).length) setFeedReactions(localFeedReactions);
         if (storedRestaurantCoordinates) {
@@ -1610,7 +1641,11 @@ export default function App() {
         }, []);
         setUsers(mergedUsers);
         if (localUser) {
-          setCurrentUser(normalizeDemoAccount({ ...localUser, gamification: mergeGamification(localUser.gamification) }));
+          const normalizedLocalUser = normalizeDemoAccount({ ...localUser, gamification: mergeGamification(localUser.gamification) });
+          setCurrentUser(normalizedLocalUser);
+          if (normalizeAccountType(normalizedLocalUser.accountType) === 'restaurant_owner') {
+            setActiveScreen({ name: 'restaurantPanel', params: {} });
+          }
         } else if (storedOnboardingSeen) {
           setAuthMode('login');
           setForm({});
@@ -1676,6 +1711,16 @@ export default function App() {
     if (!hydrated) return;
     AsyncStorage.setItem(storageKeys.feedReactions, JSON.stringify(feedReactions));
   }, [feedReactions, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    AsyncStorage.setItem(storageKeys.reservations, JSON.stringify(reservations));
+  }, [hydrated, reservations]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    AsyncStorage.setItem(storageKeys.waitlist, JSON.stringify(waitlistEntries));
+  }, [hydrated, waitlistEntries]);
 
   useEffect(() => {
     if (!hydrated || activeScreen?.name !== 'restaurantRegister' || editingRestaurant || !currentUser) return undefined;
@@ -1747,6 +1792,25 @@ export default function App() {
         .catch(() => {});
     }
   }, [currentUser, hydrated, isAdmin, restaurants]);
+
+  useEffect(() => {
+    if (!ownerRestaurantId && ownerRestaurants[0]?.id) setOwnerRestaurantId(ownerRestaurants[0].id);
+    if (ownerRestaurantId && ownerRestaurants.length && !ownerRestaurants.some((item) => item.id === ownerRestaurantId)) {
+      setOwnerRestaurantId(ownerRestaurants[0].id);
+    }
+  }, [ownerRestaurantId, ownerRestaurants]);
+
+  useEffect(() => {
+    if (!hydrated || !currentUser?.id) return;
+    const restaurantIds = isRestaurantOwner || isAdmin ? ownerRestaurants.map((item) => item.id) : [];
+    fetchReservationStateFromDb({ userId: currentUser.id, restaurantIds })
+      .then((state) => {
+        if (!state) return;
+        setReservations((localItems) => [...state.reservations, ...localItems.filter((local) => !state.reservations.some((remote) => remote.id === local.id))]);
+        setWaitlistEntries((localItems) => [...state.waitlist, ...localItems.filter((local) => !state.waitlist.some((remote) => remote.id === local.id))]);
+      })
+      .catch(() => {});
+  }, [currentUser?.id, hydrated, isAdmin, isRestaurantOwner, ownerRestaurants]);
 
   useEffect(() => {
     if (!demoDataEnabled || !hydrated || !currentUser || normalize(currentUser.email) !== normalize(demoAccountEmail)) return;
@@ -1975,8 +2039,34 @@ export default function App() {
       setTab(action.target);
     }
     if (action?.type === 'favorite') toggleFavorite(action.name, user);
-    if (action?.type === 'restaurant-register') navigateTo('restaurantRegister');
+    if (action?.type === 'restaurant-register') {
+      if (normalizeAccountType(user?.accountType) === 'restaurant_owner' || isAdminEmail(user?.email)) {
+        startRestaurantRegistration();
+      } else {
+        Alert.alert('Conta de usuário', 'Para cadastrar um estabelecimento, crie uma conta como dono de restaurante.');
+      }
+    }
     if (action?.type === 'feed-composer') openFeedComposer(user);
+    if (action?.type === 'reservation' && action.restaurant) {
+      if (normalizeAccountType(user?.accountType) === 'user') {
+        setReservationRestaurant(action.restaurant);
+      } else {
+        Alert.alert('Conta de restaurante', 'Reservas como cliente estão disponíveis em contas de usuário.');
+      }
+    }
+  }
+
+  function openAccountHome(user, newlyCreated = false) {
+    if (normalizeAccountType(user?.accountType) === 'restaurant_owner') {
+      if (newlyCreated) {
+        startRestaurantRegistration();
+      } else {
+        navigateTo('restaurantPanel');
+      }
+      return;
+    }
+    setActiveScreen(null);
+    setTab('Explorar');
   }
 
   function toggleFavorite(name, user = currentUser) {
@@ -2309,6 +2399,10 @@ export default function App() {
   }
 
   function goBack() {
+    if (activeScreen?.name === 'restaurantRegister' && isRestaurantOwner) {
+      navigateTo('restaurantPanel');
+      return;
+    }
     setActiveScreen(null);
   }
 
@@ -2430,7 +2524,11 @@ export default function App() {
   }
 
   async function saveCurrentUser(user) {
-    const normalizedUser = { ...user, gamification: mergeGamification(user.gamification) };
+    const normalizedUser = {
+      ...user,
+      accountType: normalizeAccountType(user.accountType),
+      gamification: mergeGamification(user.gamification)
+    };
     setCurrentUser(normalizedUser);
     setUsers((items) => {
       const exists = items.some((item) => item.id === normalizedUser.id);
@@ -2473,12 +2571,18 @@ export default function App() {
             setUsers(nextUsers);
             setCurrentUser(null);
             setFavorites([]);
+            setReservations((items) => items.filter((item) => item.userId !== userId));
+            setWaitlistEntries((items) => items.filter((item) => item.userId !== userId));
             setActiveScreen(null);
             setTab('Explorar');
+            const nextReservations = reservations.filter((item) => item.userId !== userId);
+            const nextWaitlist = waitlistEntries.filter((item) => item.userId !== userId);
             await AsyncStorage.multiSet([
               [storageKeys.users, JSON.stringify(nextUsers)],
               [storageKeys.currentUser, 'null'],
-              [storageKeys.favorites, JSON.stringify([])]
+              [storageKeys.favorites, JSON.stringify([])],
+              [storageKeys.reservations, JSON.stringify(nextReservations)],
+              [storageKeys.waitlist, JSON.stringify(nextWaitlist)]
             ]);
           }
         }
@@ -2911,6 +3015,10 @@ export default function App() {
     setAuthSubmitting(true);
     try {
     if (authMode === 'signup') {
+      if (!form.accountType) {
+        setAuthError('Escolha se a conta será de usuário ou dono de restaurante.');
+        return;
+      }
       if (!form.name || password.length < 6) {
         setAuthError('Informe seu nome e use uma senha com pelo menos 6 caracteres.');
         return;
@@ -2920,12 +3028,27 @@ export default function App() {
         return;
       }
       const now = new Date().toISOString();
-      const user = { id: String(Date.now()), name: form.name.trim(), email, instagram: '', photo: '', bio: '', location: '', preferences: [], gamification: defaultGamification(), createdAt: now, security: { lastLoginAt: now, platform: Platform.OS } };
+      const user = {
+        id: String(Date.now()),
+        name: form.name.trim(),
+        email,
+        accountType: normalizeAccountType(form.accountType),
+        instagram: '',
+        photo: '',
+        bio: '',
+        location: '',
+        preferences: [],
+        gamification: defaultGamification(),
+        createdAt: now,
+        security: { lastLoginAt: now, platform: Platform.OS }
+      };
       setUsers((items) => [...items, { ...user, password }]);
       await saveCurrentUser(user);
       setAuthMode(null);
       setForm({});
+      const hadPendingAction = Boolean(pendingAction);
       completePendingAction(user);
+      if (!hadPendingAction) openAccountHome(user, true);
       return;
     }
     const found = users.find((user) => normalize(user.email) === email && user.password === password);
@@ -2937,6 +3060,7 @@ export default function App() {
       id: found.id,
       name: found.name,
       email: found.email,
+      accountType: normalizeAccountType(found.accountType),
       instagram: found.instagram || '',
       photo: found.photo || '',
       bio: found.bio || '',
@@ -2949,7 +3073,9 @@ export default function App() {
     await saveCurrentUser(user);
     setAuthMode(null);
     setForm({});
+    const hadPendingAction = Boolean(pendingAction);
     completePendingAction(user);
+    if (!hadPendingAction) openAccountHome(user);
     } finally {
       setAuthSubmitting(false);
     }
@@ -3121,6 +3247,111 @@ export default function App() {
     Linking.openURL(`https://wa.me/${item.whatsapp || item.phone || '5517999999999'}?text=${encodeURIComponent(message)}`);
   }
 
+  function openNativeReservation(item) {
+    if (!currentUser) {
+      setSelectedRestaurant(null);
+      requireLogin({ type: 'reservation', restaurant: item });
+      return;
+    }
+    if (isRestaurantOwner && !isAdmin) {
+      Alert.alert('Conta de restaurante', 'Use uma conta de usuário para fazer reservas como cliente.');
+      return;
+    }
+    setSelectedRestaurant(null);
+    setReservationRestaurant(item);
+  }
+
+  function createNativeReservation(item, draft) {
+    if (!currentUser?.id || !item?.id) return false;
+    const settings = reservationSettingsFor(item);
+    const slots = reservationSlotsForDate(item, draft.date, reservations);
+    const slot = slots.find((candidate) => candidate.time === draft.time);
+    const partySize = Number(draft.partySize || 1);
+    if (!slot || slot.remaining < partySize) {
+      Alert.alert('Horário indisponível', 'Esse horário acabou de ficar lotado. Você pode entrar na lista de espera.');
+      return false;
+    }
+    const now = new Date().toISOString();
+    const reservation = {
+      id: `reservation-${currentUser.id}-${Date.now()}`,
+      restaurantId: item.id,
+      restaurantName: item.name,
+      restaurantImage: item.logo || item.image || '',
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userEmail: currentUser.email,
+      userPhone: String(draft.phone || '').trim(),
+      date: draft.date,
+      time: draft.time,
+      partySize,
+      notes: String(draft.notes || '').trim(),
+      status: settings.autoConfirm ? 'confirmed' : 'pending',
+      createdAt: now,
+      updatedAt: now
+    };
+    setReservations((items) => [reservation, ...items]);
+    saveReservationToDb(reservation).catch(() => {});
+    recordRestaurantMetricInDb(item.id, 'reservationClicks').catch(() => {});
+    Alert.alert(settings.autoConfirm ? 'Reserva confirmada' : 'Reserva solicitada', `${item.name} • ${draft.date} às ${draft.time}`);
+    return true;
+  }
+
+  function joinRestaurantWaitlist(item, draft) {
+    if (!currentUser?.id || !item?.id) return false;
+    const duplicate = waitlistEntries.some((entry) => (
+      entry.userId === currentUser.id
+      && entry.restaurantId === item.id
+      && entry.date === draft.date
+      && entry.time === draft.time
+      && entry.status === 'waiting'
+    ));
+    if (duplicate) {
+      Alert.alert('Você já está na lista', 'Acompanhe a posição em Minhas reservas.');
+      return false;
+    }
+    const now = new Date().toISOString();
+    const entry = {
+      id: `waitlist-${currentUser.id}-${Date.now()}`,
+      restaurantId: item.id,
+      restaurantName: item.name,
+      restaurantImage: item.logo || item.image || '',
+      userId: currentUser.id,
+      userName: currentUser.name,
+      userEmail: currentUser.email,
+      userPhone: String(draft.phone || '').trim(),
+      date: draft.date,
+      time: draft.time || '',
+      partySize: Number(draft.partySize || 1),
+      notes: String(draft.notes || '').trim(),
+      status: 'waiting',
+      createdAt: now,
+      updatedAt: now
+    };
+    setWaitlistEntries((items) => [entry, ...items]);
+    saveWaitlistEntryToDb(entry).catch(() => {});
+    Alert.alert('Entrada confirmada', 'O restaurante poderá avisar quando surgir uma mesa.');
+    return true;
+  }
+
+  function updateReservationStatus(reservation, status) {
+    const updated = { ...reservation, status, updatedAt: new Date().toISOString() };
+    setReservations((items) => items.map((item) => item.id === reservation.id ? updated : item));
+    saveReservationToDb(updated).catch(() => {});
+  }
+
+  function updateWaitlistStatus(entry, status) {
+    const updated = { ...entry, status, updatedAt: new Date().toISOString() };
+    setWaitlistEntries((items) => items.map((item) => item.id === entry.id ? updated : item));
+    saveWaitlistEntryToDb(updated).catch(() => {});
+  }
+
+  function updateRestaurantAvailability(item, nextSettings) {
+    const updated = { ...item, reservationSettings: nextSettings };
+    setRestaurants((items) => items.map((restaurant) => restaurant.id === item.id ? updated : restaurant));
+    setOwnerRestaurants((items) => items.map((restaurant) => restaurant.id === item.id ? updated : restaurant));
+    updateRestaurantInDb(item.id, { reservationSettings: nextSettings }, currentUser, item).catch(() => {});
+  }
+
   function editRestaurant(item) {
     setEditingRestaurant(item);
     setForm(restaurantToForm(item));
@@ -3130,6 +3361,10 @@ export default function App() {
   }
 
   async function startRestaurantRegistration(defaults = {}) {
+    if (currentUser && !isRestaurantOwner && !isAdmin) {
+      Alert.alert('Acesso do restaurante', 'Este recurso está disponível para contas de dono de restaurante.');
+      return;
+    }
     setEditingRestaurant(null);
     let savedDraft = null;
     if (!Object.keys(defaults).length && currentUser) {
@@ -3521,7 +3756,7 @@ function postKey(restaurantId, postId) {
 
         <SectionTitle title="Perto de você" action="Ver tudo" onPress={() => navigateTo('results', { title: 'Perto de você' })} />
         {featuredRestaurant ? (
-          <Pressable onPress={() => setSelectedRestaurant(featuredRestaurant)} style={({ pressed }) => [styles.discoveryFeatureCard, pressed && styles.pressed]}>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Abrir restaurante ${featuredRestaurant.name}`} onPress={() => setSelectedRestaurant(featuredRestaurant)} style={({ pressed }) => [styles.discoveryFeatureCard, pressed && styles.pressed]}>
             <Image source={imageSource(featuredRestaurant.coverPhoto || featuredRestaurant.image || featuredRestaurant.logo)} style={styles.discoveryFeatureImage} />
             <View style={styles.discoveryFeatureScrim} />
             <Pressable onPress={(event) => { event?.stopPropagation?.(); toggleFavorite(featuredRestaurant.name); }} style={styles.discoverySaveButton}>
@@ -4165,7 +4400,9 @@ function postKey(restaurantId, postId) {
               </View>
             </>
           )}
-          <AppButton onPress={() => currentUser ? startRestaurantRegistration() : requireLogin({ type: 'restaurant-register' })}>Cadastrar restaurante</AppButton>
+          {isRestaurantOwner || isAdmin ? (
+            <AppButton onPress={() => currentUser ? startRestaurantRegistration() : requireLogin({ type: 'restaurant-register' })}>Cadastrar restaurante</AppButton>
+          ) : null}
           {isAdmin ? <AppButton kind="secondary" onPress={() => navigateTo('adminApprovals')}>Central admin</AppButton> : null}
         </View>
       </View>
@@ -4485,6 +4722,12 @@ function postKey(restaurantId, postId) {
             <Ionicons name="bookmark-outline" size={18} color={colors.ink} />
             <Text style={styles.profileSavedActionText}>Salvos</Text>
           </Pressable>
+          {!isRestaurantOwner ? (
+            <Pressable accessibilityRole="button" accessibilityLabel="Abrir minhas reservas" onPress={() => navigateTo('myReservations')} style={styles.profileSavedAction}>
+              <Ionicons name="calendar-outline" size={18} color={colors.ink} />
+              <Text style={styles.profileSavedActionText}>Reservas</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={styles.profileFoodMap}>
@@ -4990,6 +5233,100 @@ function postKey(restaurantId, postId) {
     );
   }
 
+  function renderMyReservationsScreen() {
+    const userReservations = reservations
+      .filter((item) => item.userId === currentUser?.id)
+      .sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
+    const userWaitlist = waitlistEntries
+      .filter((item) => item.userId === currentUser?.id && item.status !== 'cancelled')
+      .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+    return (
+      <View>
+        {renderScreenHeader('Minhas reservas', 'Confirmações, histórico e listas de espera')}
+        <View style={styles.bookingSummaryGrid}>
+          {[
+            ['calendar-outline', userReservations.filter((item) => ['pending', 'confirmed'].includes(item.status)).length, 'Próximas'],
+            ['checkmark-circle-outline', userReservations.filter((item) => item.status === 'completed').length, 'Concluídas'],
+            ['time-outline', userWaitlist.filter((item) => item.status === 'waiting').length, 'Na espera']
+          ].map(([icon, value, label]) => (
+            <View key={label} style={styles.bookingSummaryCard}>
+              <Ionicons name={icon} size={21} color={colors.redDark} />
+              <Text style={styles.bookingSummaryValue}>{value}</Text>
+              <Text style={styles.bookingSummaryLabel}>{label}</Text>
+            </View>
+          ))}
+        </View>
+
+        <SectionTitle title="Reservas" />
+        <View style={styles.bookingList}>
+          {userReservations.length ? userReservations.map((reservation) => (
+            <View key={reservation.id} style={styles.bookingCard}>
+              <View style={styles.bookingCardHeader}>
+                <View style={styles.bookingRestaurantAvatar}>
+                  {reservation.restaurantImage ? <Image source={imageSource(reservation.restaurantImage)} style={styles.bookingRestaurantImage} /> : <Ionicons name="restaurant-outline" size={20} color={colors.redDark} />}
+                </View>
+                <View style={styles.bookingCardCopy}>
+                  <Text style={styles.bookingRestaurantName}>{reservation.restaurantName}</Text>
+                  <Text style={styles.bookingMeta}>{reservation.date} • {reservation.time} • {reservation.partySize} pessoas</Text>
+                </View>
+                <View style={[styles.bookingStatusPill, { backgroundColor: `${reservationStatusColor(reservation.status)}18` }]}>
+                  <Text style={[styles.bookingStatusText, { color: reservationStatusColor(reservation.status) }]}>{reservationStatusLabel(reservation.status)}</Text>
+                </View>
+              </View>
+              {reservation.notes ? <Text style={styles.bookingNotes}>{reservation.notes}</Text> : null}
+              {['pending', 'confirmed'].includes(reservation.status) ? (
+                <Pressable onPress={() => updateReservationStatus(reservation, 'cancelled')} style={styles.bookingCancelButton}>
+                  <Text style={styles.bookingCancelText}>Cancelar reserva</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          )) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>Nenhuma reserva ainda</Text>
+              <Text style={styles.emptyText}>Abra um restaurante e escolha um horário disponível.</Text>
+            </View>
+          )}
+        </View>
+
+        <SectionTitle title="Lista de espera" />
+        <View style={styles.bookingList}>
+          {userWaitlist.length ? userWaitlist.map((entry) => {
+            const position = waitlistEntries
+              .filter((item) => item.restaurantId === entry.restaurantId && item.date === entry.date && item.time === entry.time && item.status === 'waiting')
+              .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))
+              .findIndex((item) => item.id === entry.id) + 1;
+            return (
+              <View key={entry.id} style={styles.bookingCard}>
+                <View style={styles.bookingCardHeader}>
+                  <View style={styles.bookingRestaurantAvatar}><Ionicons name="time-outline" size={21} color={colors.redDark} /></View>
+                  <View style={styles.bookingCardCopy}>
+                    <Text style={styles.bookingRestaurantName}>{entry.restaurantName}</Text>
+                    <Text style={styles.bookingMeta}>{entry.date}{entry.time ? ` • ${entry.time}` : ''} • {entry.partySize} pessoas</Text>
+                  </View>
+                  <View style={styles.bookingWaitPosition}>
+                    <Text style={styles.bookingWaitPositionValue}>{position > 0 ? position : '—'}</Text>
+                    <Text style={styles.bookingWaitPositionLabel}>posição</Text>
+                  </View>
+                </View>
+                <Text style={styles.bookingNotes}>{waitlistStatusLabel(entry.status)}</Text>
+                {entry.status === 'waiting' ? (
+                  <Pressable onPress={() => updateWaitlistStatus(entry, 'cancelled')} style={styles.bookingCancelButton}>
+                    <Text style={styles.bookingCancelText}>Sair da lista</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            );
+          }) : (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>Nenhuma espera ativa</Text>
+              <Text style={styles.emptyText}>Quando um horário estiver lotado, você poderá entrar na fila.</Text>
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  }
+
   function renderPrivacyScreen() {
     const privacy = {
       publicProfile: true,
@@ -5033,7 +5370,7 @@ function postKey(restaurantId, postId) {
         <View style={styles.pagePanel}>
           <Text style={styles.panelTitle}>Conta</Text>
           <Text style={styles.panelText}>Email: {currentUser?.email || 'sem login'}</Text>
-          <Text style={styles.panelText}>Tipo de acesso: {isAdmin ? 'Administrador' : currentUser ? 'Usuario' : 'Visitante'}</Text>
+          <Text style={styles.panelText}>Tipo de acesso: {isAdmin ? 'Administrador' : isRestaurantOwner ? 'Dono de restaurante' : currentUser ? 'Usuário' : 'Visitante'}</Text>
           <Text style={styles.panelText}>Sincronizacao: {supabaseReady ? 'Supabase ativo' : 'Modo local'}</Text>
           <Text style={styles.panelText}>Senha: {passwordUpdatedAt}</Text>
         </View>
@@ -5293,18 +5630,19 @@ function postKey(restaurantId, postId) {
         title: copy.account,
         items: [
           ['person-outline', copy.editProfile, copy.editProfileSub, () => setTab('Perfil')],
+          ...(!isRestaurantOwner ? [['calendar-outline', 'Minhas reservas', 'Confirmações e listas de espera', () => navigateTo('myReservations')]] : []),
           ['restaurant-outline', copy.preferences, copy.preferencesSub, () => navigateTo('preferences')],
           ['diamond-outline', 'Dine+', 'Clube, benefícios e experiências exclusivas', () => navigateTo('dinePlus')]
         ]
       },
-      {
+      ...(isRestaurantOwner || isAdmin ? [{
         title: copy.restaurants,
         items: [
           ['storefront-outline', copy.restaurantPanel, copy.restaurantPanelSub, () => currentUser ? navigateTo('restaurantPanel') : requireLogin({ type: 'restaurant-register' })],
           ['add-circle-outline', copy.registerRestaurant, copy.registerRestaurantSub, () => currentUser ? startRestaurantRegistration() : requireLogin({ type: 'restaurant-register' })],
           ...(isAdmin ? [['shield-outline', copy.admin, copy.adminSub, () => navigateTo('adminApprovals')]] : [])
         ]
-      },
+      }] : []),
       {
         title: copy.privacySecurity,
         items: [
@@ -5639,136 +5977,329 @@ function postKey(restaurantId, postId) {
     const items = isAdmin
       ? allManagedRestaurants
       : (ownerRestaurants.length ? ownerRestaurants : restaurants.filter((item) => item.ownerId === currentUser?.id));
-    const ownerStats = [
-      ['Restaurantes', items.length],
-      ['Publicados', items.filter((item) => item.status === 'published').length],
-      ['Pendentes', items.filter((item) => item.status === 'pending').length],
-      ['Pausados', items.filter((item) => item.status === 'paused').length]
+    const item = items.find((restaurant) => restaurant.id === ownerRestaurantId) || items[0];
+    const itemReservations = reservations
+      .filter((reservation) => reservation.restaurantId === item?.id)
+      .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+    const itemWaitlist = waitlistEntries
+      .filter((entry) => entry.restaurantId === item?.id && entry.status !== 'cancelled')
+      .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+    const today = nextReservationDates(1, 1)[0]?.key;
+    const todayReservations = itemReservations.filter((reservation) => reservation.date === today && !['cancelled', 'no_show'].includes(reservation.status));
+    const settings = reservationSettingsFor(item || {});
+    const futureReservations = itemReservations.filter((reservation) => (
+      reservation.date >= today && !['cancelled', 'completed', 'no_show'].includes(reservation.status)
+    ));
+    const ownerTabs = [
+      ['Visão geral', 'grid-outline'],
+      ['Reservas', 'calendar-outline'],
+      ['Disponibilidade', 'time-outline'],
+      ['Perfil', 'storefront-outline']
     ];
     return (
       <View style={styles.restaurantPanelScreen}>
-        <View style={styles.restaurantPanelTopBar}>
-          <Pressable onPress={goBack} style={styles.restaurantPanelBackButton} hitSlop={10}>
-            <Ionicons name="chevron-back" size={24} color={colors.ink} />
-          </Pressable>
-        </View>
-        <PageTitle title="Painel do restaurante" subtitle={isAdmin ? 'Gerencie os perfis de todos os restaurantes e ajude empresas pelo suporte.' : 'Cadastre, acompanhe aprovação e mantenha seus perfis atualizados.'} />
-        {isAdmin ? (
-          <View style={styles.pagePanel}>
-            <Text style={styles.panelTitle}>Gestão assistida</Text>
-            <Text style={styles.panelText}>Cadastre restaurantes em nome de uma empresa, edite perfis existentes e mantenha responsáveis registrados para suporte.</Text>
-            <View style={styles.ownerButtonsRow}>
-              <AppButton onPress={() => startRestaurantRegistration({ status: 'published', adminManaged: true })}>Cadastrar para empresa</AppButton>
-              <AppButton kind="secondary" onPress={() => navigateTo('adminApprovals')}>Central admin</AppButton>
+        <View style={styles.ownerWorkspaceHeader}>
+          <View style={styles.ownerWorkspaceBrand}>
+            <Image source={dineLogo} style={styles.ownerWorkspaceLogo} resizeMode="contain" />
+            <View>
+              <Text style={styles.ownerWorkspaceEyebrow}>Dine para restaurantes</Text>
+              <Text style={styles.ownerWorkspaceTitle}>Painel do parceiro</Text>
             </View>
           </View>
-        ) : null}
-        <View style={styles.adminSummaryGrid}>
-          {ownerStats.map(([label, value]) => (
-            <View key={label} style={styles.adminSummaryCard}>
-              <Text style={styles.adminSummaryValue}>{value}</Text>
-              <Text style={styles.adminSummaryLabel}>{label}</Text>
-            </View>
-          ))}
+          <Pressable onPress={() => { setActiveScreen(null); setTab('Explorar'); }} style={styles.ownerWorkspaceConsumerButton}>
+            <Ionicons name="eye-outline" size={17} color={colors.ink} />
+            <Text style={styles.ownerWorkspaceConsumerText}>Ver como cliente</Text>
+          </Pressable>
         </View>
-        {items.length ? items.map((item) => {
-          const feedItems = buildRestaurantFeedItems(item);
-          const avatarText = String(item.name || 'R').slice(0, 1).toUpperCase();
-          const totalClicks = Number(item.metrics?.mapsClicks || 0) + Number(item.metrics?.whatsappClicks || 0) + Number(item.metrics?.reservationClicks || 0);
-          return (
-            <View key={item.id} style={styles.ownerCard}>
-              <Image source={imageSource(item.coverPhoto || item.image)} style={styles.ownerHeroImage} />
-              <View style={styles.ownerProfileRow}>
-                <View style={styles.ownerAvatarRing}>
-                  <View style={styles.ownerAvatarFrame}>
-                    <Image source={imageSource(item.logo || item.image)} style={styles.ownerAvatar} />
-                    {!item.logo && !item.image ? <Text style={styles.ownerAvatarFallback}>{avatarText}</Text> : null}
-                  </View>
+
+        {items.length > 1 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.ownerRestaurantSwitcher}>
+            {items.map((restaurant) => (
+              <Pressable
+                key={restaurant.id}
+                onPress={() => setOwnerRestaurantId(restaurant.id)}
+                style={[styles.ownerRestaurantSwitchCard, item?.id === restaurant.id && styles.ownerRestaurantSwitchCardActive]}
+              >
+                <Image source={imageSource(restaurant.logo || restaurant.image)} style={styles.ownerRestaurantSwitchImage} />
+                <View>
+                  <Text numberOfLines={1} style={styles.ownerRestaurantSwitchName}>{restaurant.name}</Text>
+                  <Text style={styles.ownerRestaurantSwitchMeta}>{restaurant.status === 'published' ? 'Publicado' : 'Em configuração'}</Text>
                 </View>
-                <View style={styles.ownerProfileStats}>
+              </Pressable>
+            ))}
+          </ScrollView>
+        ) : null}
+
+        {!item ? (
+          <View style={styles.ownerWorkspaceEmpty}>
+            <View style={styles.ownerWorkspaceEmptyIcon}><Ionicons name="storefront-outline" size={32} color={colors.redDark} /></View>
+            <Text style={styles.emptyTitle}>Configure seu primeiro restaurante</Text>
+            <Text style={styles.emptyText}>Depois do cadastro, reservas, disponibilidade e perfil serão gerenciados por aqui.</Text>
+            <AppButton onPress={() => startRestaurantRegistration()}>Cadastrar restaurante</AppButton>
+          </View>
+        ) : (
+          <>
+            <View style={styles.ownerSelectedRestaurantHeader}>
+              <Image source={imageSource(item.logo || item.image)} style={styles.ownerSelectedRestaurantLogo} />
+              <View style={styles.ownerSelectedRestaurantCopy}>
+                <Text style={styles.ownerSelectedRestaurantName}>{item.name}</Text>
+                <Text style={styles.ownerSelectedRestaurantMeta}>{item.type} • {item.district}</Text>
+              </View>
+              {renderRestaurantStatusPill(item.status)}
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.ownerWorkspaceTabs}>
+              {ownerTabs.map(([label, icon]) => (
+                <Pressable
+                  key={label}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: ownerPanelTab === label }}
+                  onPress={() => setOwnerPanelTab(label)}
+                  style={[styles.ownerWorkspaceTab, ownerPanelTab === label && styles.ownerWorkspaceTabActive]}
+                >
+                  <Ionicons name={icon} size={18} color={ownerPanelTab === label ? colors.card : colors.ink} />
+                  <Text style={[styles.ownerWorkspaceTabText, ownerPanelTab === label && styles.ownerWorkspaceTabTextActive]}>{label}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            {ownerPanelTab === 'Visão geral' ? (
+              <View style={styles.ownerWorkspaceSection}>
+                <View style={styles.ownerOverviewHero}>
+                  <View>
+                    <Text style={styles.ownerOverviewEyebrow}>Hoje, {today?.split('-').reverse().join('/')}</Text>
+                    <Text style={styles.ownerOverviewTitle}>{todayReservations.length} reservas</Text>
+                    <Text style={styles.ownerOverviewText}>{todayReservations.reduce((total, reservation) => total + Number(reservation.partySize || 0), 0)} pessoas esperadas</Text>
+                  </View>
+                  <View style={styles.ownerOverviewHeroIcon}><Ionicons name="calendar" size={28} color={colors.card} /></View>
+                </View>
+                <View style={styles.bookingSummaryGrid}>
                   {[
-                    ['Cardápio', feedItems.length],
-                    ['Visitas', item.metrics?.views || 0],
-                    ['Cliques', totalClicks],
-                    ['Salvos', item.metrics?.favorites || 0]
-                  ].map(([label, value]) => (
-                    <View key={label} style={styles.ownerStat}>
-                      <Text style={styles.ownerStatValue}>{value}</Text>
-                      <Text style={styles.ownerStatLabel}>{label}</Text>
+                    ['calendar-outline', futureReservations.length, 'Próximas'],
+                    ['hourglass-outline', itemReservations.filter((reservation) => reservation.status === 'pending').length, 'Pendentes'],
+                    ['time-outline', itemWaitlist.filter((entry) => entry.status === 'waiting').length, 'Na espera'],
+                    ['people-outline', itemReservations.filter((reservation) => reservation.status === 'completed').length, 'Atendidas']
+                  ].map(([icon, value, label]) => (
+                    <View key={label} style={styles.bookingSummaryCard}>
+                      <Ionicons name={icon} size={21} color={colors.redDark} />
+                      <Text style={styles.bookingSummaryValue}>{value}</Text>
+                      <Text style={styles.bookingSummaryLabel}>{label}</Text>
                     </View>
                   ))}
                 </View>
-                {renderRestaurantStatusPill(item.status)}
-              </View>
-
-              <View style={styles.ownerProfileBody}>
-                <Text style={styles.ownerCardTitle}>{item.name}</Text>
-                <Text style={styles.ownerCardMeta}>{item.type} • {item.district}</Text>
-                {isAdmin ? <Text style={styles.ownerCardMeta}>Responsável: {item.ownerEmail || item.ownerName || 'gerenciado pelo Dine'}{item.managedByAdmin ? ' • suporte admin' : ''}</Text> : null}
-                <Text style={styles.ownerCardBio} numberOfLines={3}>{item.description}</Text>
-              </View>
-
-              <View style={styles.metricGrid}>
-                {[
-                  ['Mapa', item.metrics?.mapsClicks || 0],
-                  ['WhatsApp', item.metrics?.whatsappClicks || 0],
-                  ['Reservas', item.metrics?.reservationClicks || 0],
-                  ['Avaliações', item.reviews || 0]
-                ].map(([label, value]) => (
-                  <View key={label} style={styles.metricBox}>
-                    <Text style={styles.metricValue}>{value}</Text>
-                    <Text style={styles.metricLabel}>{label}</Text>
-                  </View>
-                ))}
-              </View>
-
-              <View style={styles.ownerButtonsRow}>
-                <AppButton kind="secondary" onPress={() => editRestaurant(item)}>Editar perfil</AppButton>
-                <AppButton kind="secondary" onPress={() => Share.share({ message: `${item.name} no Dine` })}>Compartilhar</AppButton>
-              </View>
-
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.ownerStoryRow}>
-                {(item.highlights || []).slice(0, 6).map((highlight, index) => (
-                  <View key={highlight} style={styles.ownerStoryItem}>
-                    <View style={styles.ownerStoryRing}>
-                      <Ionicons name="restaurant-outline" size={16} color={colors.redDark} />
+                <View style={styles.ownerQuickActions}>
+                  <Pressable onPress={() => setOwnerPanelTab('Reservas')} style={styles.ownerQuickAction}>
+                    <Ionicons name="calendar-outline" size={22} color={colors.redDark} />
+                    <Text style={styles.ownerQuickActionTitle}>Gerenciar reservas</Text>
+                    <Text style={styles.ownerQuickActionText}>Confirmar chegadas e acompanhar a espera.</Text>
+                  </Pressable>
+                  <Pressable onPress={() => setOwnerPanelTab('Disponibilidade')} style={styles.ownerQuickAction}>
+                    <Ionicons name="time-outline" size={22} color={colors.redDark} />
+                    <Text style={styles.ownerQuickActionTitle}>Editar horários</Text>
+                    <Text style={styles.ownerQuickActionText}>Definir dias, intervalos e capacidade.</Text>
+                  </Pressable>
+                </View>
+                <SectionTitle title="Desempenho do perfil" />
+                <View style={styles.metricGrid}>
+                  {[
+                    ['Visitas', item.metrics?.views || 0],
+                    ['Mapa', item.metrics?.mapsClicks || 0],
+                    ['WhatsApp', item.metrics?.whatsappClicks || 0],
+                    ['Reservas', itemReservations.length]
+                  ].map(([label, value]) => (
+                    <View key={label} style={styles.metricBox}>
+                      <Text style={styles.metricValue}>{value}</Text>
+                      <Text style={styles.metricLabel}>{label}</Text>
                     </View>
-                    <Text style={styles.ownerStoryChipText} numberOfLines={2}>{highlight}</Text>
-                  </View>
-                ))}
-              </ScrollView>
-
-              <View style={styles.ownerTabRow}>
-                <View style={[styles.ownerTab, styles.ownerTabActive]}>
-                  <Ionicons name="grid-outline" size={17} color={colors.ink} />
-                  <Text style={[styles.ownerTabText, styles.ownerTabTextActive]}>Cardápio</Text>
+                  ))}
                 </View>
               </View>
+            ) : null}
 
-              <View style={styles.ownerGrid}>
-                {feedItems.slice(0, 9).map((feedItem, index) => (
-                  <Pressable key={feedItem.id} style={styles.ownerGridTile} onPress={() => openPanelPost(item, feedItem)}>
-                    <Image source={{ uri: feedItem.image }} style={styles.ownerGridImage} />
-                    <View style={styles.ownerGridOverlay}>
-                      <Ionicons name={feedItem.kind === 'menuPhoto' || feedItem.kind === 'dish' ? 'restaurant' : 'image-outline'} size={12} color={colors.ink} />
+            {ownerPanelTab === 'Reservas' ? (
+              <View style={styles.ownerWorkspaceSection}>
+                <View style={styles.ownerSectionHeading}>
+                  <View>
+                    <Text style={styles.ownerSectionTitle}>Agenda de reservas</Text>
+                    <Text style={styles.ownerSectionSubtitle}>{futureReservations.length} próximas • {itemWaitlist.filter((entry) => entry.status === 'waiting').length} esperando</Text>
+                  </View>
+                </View>
+                <View style={styles.bookingList}>
+                  {itemReservations.length ? itemReservations.map((reservation) => (
+                    <View key={reservation.id} style={styles.ownerBookingCard}>
+                      <View style={styles.ownerBookingTime}>
+                        <Text style={styles.ownerBookingTimeValue}>{reservation.time}</Text>
+                        <Text style={styles.ownerBookingDate}>{reservation.date?.split('-').slice(1).reverse().join('/')}</Text>
+                      </View>
+                      <View style={styles.bookingCardCopy}>
+                        <Text style={styles.bookingRestaurantName}>{reservation.userName || 'Cliente Dine'}</Text>
+                        <Text style={styles.bookingMeta}>{reservation.partySize} pessoas{reservation.userPhone ? ` • ${reservation.userPhone}` : ''}</Text>
+                        <Text style={[styles.bookingStatusInline, { color: reservationStatusColor(reservation.status) }]}>{reservationStatusLabel(reservation.status)}</Text>
+                        {reservation.notes ? <Text style={styles.bookingNotes}>{reservation.notes}</Text> : null}
+                      </View>
+                      <View style={styles.ownerBookingActions}>
+                        {reservation.status === 'pending' ? <Pressable accessibilityLabel="Confirmar reserva" onPress={() => updateReservationStatus(reservation, 'confirmed')} style={styles.ownerBookingPrimary}><Ionicons name="checkmark" size={17} color={colors.card} /></Pressable> : null}
+                        {reservation.status === 'confirmed' ? <Pressable accessibilityLabel="Registrar chegada" onPress={() => updateReservationStatus(reservation, 'seated')} style={styles.ownerBookingPrimary}><Ionicons name="restaurant" size={16} color={colors.card} /></Pressable> : null}
+                        {reservation.status === 'seated' ? <Pressable accessibilityLabel="Concluir reserva" onPress={() => updateReservationStatus(reservation, 'completed')} style={styles.ownerBookingPrimary}><Ionicons name="checkmark-done" size={17} color={colors.card} /></Pressable> : null}
+                        {['pending', 'confirmed'].includes(reservation.status) ? <Pressable accessibilityLabel="Cancelar reserva" onPress={() => updateReservationStatus(reservation, 'cancelled')} style={styles.ownerBookingSecondary}><Ionicons name="close" size={17} color={colors.redDark} /></Pressable> : null}
+                      </View>
                     </View>
-                  </Pressable>
-                ))}
+                  )) : (
+                    <View style={styles.emptyState}>
+                      <Text style={styles.emptyTitle}>Agenda vazia</Text>
+                      <Text style={styles.emptyText}>As reservas feitas no Dine aparecerão aqui.</Text>
+                    </View>
+                  )}
+                </View>
+                <SectionTitle title="Lista de espera" />
+                <View style={styles.bookingList}>
+                  {itemWaitlist.length ? itemWaitlist.map((entry, index) => (
+                    <View key={entry.id} style={styles.ownerBookingCard}>
+                      <View style={styles.ownerWaitPosition}><Text style={styles.ownerWaitPositionText}>{index + 1}</Text></View>
+                      <View style={styles.bookingCardCopy}>
+                        <Text style={styles.bookingRestaurantName}>{entry.userName || 'Cliente Dine'}</Text>
+                        <Text style={styles.bookingMeta}>{entry.date}{entry.time ? ` • ${entry.time}` : ''} • {entry.partySize} pessoas</Text>
+                        <Text style={styles.bookingNotes}>{waitlistStatusLabel(entry.status)}</Text>
+                      </View>
+                      <View style={styles.ownerBookingActions}>
+                        {entry.status === 'waiting' ? <Pressable accessibilityLabel="Avisar cliente" onPress={() => updateWaitlistStatus(entry, 'notified')} style={styles.ownerBookingPrimary}><Ionicons name="notifications-outline" size={17} color={colors.card} /></Pressable> : null}
+                        {entry.status !== 'cancelled' ? <Pressable accessibilityLabel="Remover da espera" onPress={() => updateWaitlistStatus(entry, 'cancelled')} style={styles.ownerBookingSecondary}><Ionicons name="close" size={17} color={colors.redDark} /></Pressable> : null}
+                      </View>
+                    </View>
+                  )) : <Text style={styles.ownerSectionEmptyText}>Nenhum cliente na lista de espera.</Text>}
+                </View>
               </View>
+            ) : null}
 
-              <View style={styles.ownerActions}>
-                <AppButton kind="secondary" onPress={() => changeRestaurantStatus(item, item.status === 'paused' ? 'pending' : 'paused')}>{item.status === 'paused' ? 'Enviar para revisão' : 'Pausar'}</AppButton>
-                <AppButton kind="secondary" onPress={() => changeRestaurantStatus(item, 'archived')}>Arquivar</AppButton>
+            {ownerPanelTab === 'Disponibilidade' ? (
+              <View style={styles.ownerWorkspaceSection}>
+                <View style={styles.availabilitySettingCard}>
+                  <View style={styles.availabilitySettingCopy}>
+                    <Text style={styles.ownerSectionTitle}>Reservas pelo Dine</Text>
+                    <Text style={styles.ownerSectionSubtitle}>Permitir que clientes escolham horários disponíveis.</Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: settings.enabled }}
+                    onPress={() => updateRestaurantAvailability(item, { ...settings, enabled: !settings.enabled })}
+                    style={[styles.settingsToggle, settings.enabled && styles.settingsToggleActive]}
+                  >
+                    <View style={[styles.settingsToggleThumb, settings.enabled && styles.settingsToggleThumbActive]} />
+                  </Pressable>
+                </View>
+                <View style={styles.availabilitySettingCard}>
+                  <View style={styles.availabilitySettingCopy}>
+                    <Text style={styles.ownerSectionTitle}>Confirmação automática</Text>
+                    <Text style={styles.ownerSectionSubtitle}>Reservas dentro da capacidade já entram confirmadas.</Text>
+                  </View>
+                  <Pressable
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: settings.autoConfirm }}
+                    onPress={() => updateRestaurantAvailability(item, { ...settings, autoConfirm: !settings.autoConfirm })}
+                    style={[styles.settingsToggle, settings.autoConfirm && styles.settingsToggleActive]}
+                  >
+                    <View style={[styles.settingsToggleThumb, settings.autoConfirm && styles.settingsToggleThumbActive]} />
+                  </Pressable>
+                </View>
+
+                <Text style={styles.registerFieldLabel}>Intervalo entre horários</Text>
+                <View style={styles.registerChoiceRow}>
+                  {[30, 60, 90].map((minutes) => (
+                    <Pressable key={minutes} onPress={() => updateRestaurantAvailability(item, { ...settings, slotMinutes: minutes })} style={[styles.registerChoice, settings.slotMinutes === minutes && styles.registerChoiceActive]}>
+                      <Text style={[styles.registerChoiceText, settings.slotMinutes === minutes && styles.registerChoiceTextActive]}>{minutes} min</Text>
+                    </Pressable>
+                  ))}
+                </View>
+
+                <View style={styles.availabilityNumberGrid}>
+                  <View style={styles.availabilityNumberCard}>
+                    <Text style={styles.registerFieldLabel}>Pessoas por horário</Text>
+                    <View style={styles.availabilityStepper}>
+                      <Pressable accessibilityLabel="Diminuir capacidade" onPress={() => updateRestaurantAvailability(item, { ...settings, capacityPerSlot: Math.max(1, settings.capacityPerSlot - 1) })} style={styles.availabilityStepButton}><Ionicons name="remove" size={18} color={colors.ink} /></Pressable>
+                      <Text style={styles.availabilityStepValue}>{settings.capacityPerSlot}</Text>
+                      <Pressable accessibilityLabel="Aumentar capacidade" onPress={() => updateRestaurantAvailability(item, { ...settings, capacityPerSlot: settings.capacityPerSlot + 1 })} style={styles.availabilityStepButton}><Ionicons name="add" size={18} color={colors.ink} /></Pressable>
+                    </View>
+                  </View>
+                  <View style={styles.availabilityNumberCard}>
+                    <Text style={styles.registerFieldLabel}>Máximo por reserva</Text>
+                    <View style={styles.availabilityStepper}>
+                      <Pressable accessibilityLabel="Diminuir limite do grupo" onPress={() => updateRestaurantAvailability(item, { ...settings, maxPartySize: Math.max(1, settings.maxPartySize - 1) })} style={styles.availabilityStepButton}><Ionicons name="remove" size={18} color={colors.ink} /></Pressable>
+                      <Text style={styles.availabilityStepValue}>{settings.maxPartySize}</Text>
+                      <Pressable accessibilityLabel="Aumentar limite do grupo" onPress={() => updateRestaurantAvailability(item, { ...settings, maxPartySize: settings.maxPartySize + 1 })} style={styles.availabilityStepButton}><Ionicons name="add" size={18} color={colors.ink} /></Pressable>
+                    </View>
+                  </View>
+                </View>
+
+                <SectionTitle title="Agenda semanal" />
+                <View style={styles.availabilityWeekList}>
+                  {reservationWeekDays.map(([key, label]) => {
+                    const day = settings.weekly[key];
+                    return (
+                      <View key={key} style={[styles.availabilityDayCard, !day.enabled && styles.availabilityDayCardDisabled]}>
+                        <Pressable
+                          accessibilityRole="switch"
+                          accessibilityState={{ checked: day.enabled }}
+                          onPress={() => updateRestaurantAvailability(item, {
+                            ...settings,
+                            weekly: { ...settings.weekly, [key]: { ...day, enabled: !day.enabled } }
+                          })}
+                          style={[styles.availabilityDayToggle, day.enabled && styles.availabilityDayToggleActive]}
+                        >
+                          <Ionicons name={day.enabled ? 'checkmark' : 'close'} size={15} color={day.enabled ? colors.card : colors.muted} />
+                        </Pressable>
+                        <Text style={styles.availabilityDayLabel}>{label}</Text>
+                        <TextInput
+                          accessibilityLabel={`Início ${label}`}
+                          editable={day.enabled}
+                          value={day.start}
+                          onChangeText={(value) => updateRestaurantAvailability(item, { ...settings, weekly: { ...settings.weekly, [key]: { ...day, start: value } } })}
+                          style={[styles.availabilityTimeInput, !day.enabled && styles.availabilityTimeInputDisabled]}
+                        />
+                        <Text style={styles.availabilityTimeSeparator}>até</Text>
+                        <TextInput
+                          accessibilityLabel={`Fim ${label}`}
+                          editable={day.enabled}
+                          value={day.end}
+                          onChangeText={(value) => updateRestaurantAvailability(item, { ...settings, weekly: { ...settings.weekly, [key]: { ...day, end: value } } })}
+                          style={[styles.availabilityTimeInput, !day.enabled && styles.availabilityTimeInputDisabled]}
+                        />
+                      </View>
+                    );
+                  })}
+                </View>
               </View>
+            ) : null}
+
+            {ownerPanelTab === 'Perfil' ? (
+              <View style={styles.ownerWorkspaceSection}>
+                <View style={styles.ownerProfilePreview}>
+                  <Image source={imageSource(item.coverPhoto || item.image)} style={styles.ownerProfilePreviewCover} />
+                  <View style={styles.ownerProfilePreviewBody}>
+                    <Image source={imageSource(item.logo || item.image)} style={styles.ownerProfilePreviewLogo} />
+                    <View style={styles.ownerProfilePreviewCopy}>
+                      <Text style={styles.ownerCardTitle}>{item.name}</Text>
+                      <Text style={styles.ownerCardMeta}>{item.type} • {item.district}</Text>
+                      <Text style={styles.ownerCardBio}>{item.description}</Text>
+                    </View>
+                  </View>
+                </View>
+                <View style={styles.ownerButtonsRow}>
+                  <AppButton kind="secondary" onPress={() => editRestaurant(item)}>Editar perfil</AppButton>
+                  <AppButton kind="secondary" onPress={() => Share.share({ message: `${item.name} no Dine` })}>Compartilhar</AppButton>
+                </View>
+                <View style={styles.ownerActions}>
+                  <AppButton kind="secondary" onPress={() => changeRestaurantStatus(item, item.status === 'paused' ? 'pending' : 'paused')}>{item.status === 'paused' ? 'Enviar para revisão' : 'Pausar'}</AppButton>
+                  <AppButton kind="secondary" onPress={() => changeRestaurantStatus(item, 'archived')}>Arquivar</AppButton>
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.ownerWorkspaceFooterActions}>
+              <AppButton kind="secondary" onPress={() => startRestaurantRegistration()}>{isAdmin ? 'Cadastrar para empresa' : 'Adicionar restaurante'}</AppButton>
+              {isAdmin ? <AppButton kind="secondary" onPress={() => navigateTo('adminApprovals')}>Central admin</AppButton> : null}
             </View>
-          );
-        }) : (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>Nenhum restaurante cadastrado</Text>
-            <Text style={styles.emptyText}>Cadastre um restaurante para acompanhar aprovação, métricas e edição.</Text>
-          </View>
+          </>
         )}
-        <AppButton onPress={() => startRestaurantRegistration()}>{isAdmin ? 'Cadastrar restaurante para empresa' : 'Cadastrar novo restaurante'}</AppButton>
       </View>
     );
   }
@@ -6241,6 +6772,7 @@ function postKey(restaurantId, postId) {
       city: renderCityScreen,
       preferences: renderPreferencesScreen,
       history: renderHistoryScreen,
+      myReservations: renderMyReservationsScreen,
       privacy: renderPrivacyScreen,
       security: renderSecurityScreen,
       connectedDevices: renderConnectedDevicesScreen,
@@ -6311,6 +6843,7 @@ function postKey(restaurantId, postId) {
         onClose={() => setSelectedRestaurant(null)}
         onMaps={openMaps}
         onWhatsApp={openWhatsApp}
+        onReserve={openNativeReservation}
         onClaim={claimRestaurant}
         reviews={selectedRestaurant ? sortedReviews(selectedRestaurant.id) : []}
         reviewDraft={reviewDraft}
@@ -6331,6 +6864,18 @@ function postKey(restaurantId, postId) {
         favorite={selectedRestaurant && favorites.includes(selectedRestaurant.name)}
         onFavorite={toggleFavorite}
         onReportContent={reportContent}
+      />
+      <ReservationModal
+        item={reservationRestaurant}
+        currentUser={currentUser}
+        reservations={reservations}
+        onClose={() => setReservationRestaurant(null)}
+        onReserve={(item, draft) => {
+          if (createNativeReservation(item, draft)) setReservationRestaurant(null);
+        }}
+        onWaitlist={(item, draft) => {
+          if (joinRestaurantWaitlist(item, draft)) setReservationRestaurant(null);
+        }}
       />
       <PostViewerModal
         visible={Boolean(selectedPanelPost)}
@@ -6607,11 +7152,147 @@ function FeedComposerModal({ visible, draft, setDraft, restaurants, onClose, onP
   );
 }
 
+function ReservationModal({ item, currentUser, reservations = [], onClose, onReserve, onWaitlist }) {
+  const settings = reservationSettingsFor(item || {});
+  const dates = useMemo(() => nextReservationDates(settings.advanceDays, 7), [item?.id, settings.advanceDays]);
+  const [draft, setDraft] = useState({ date: '', time: '', partySize: 2, phone: '', notes: '' });
+
+  useEffect(() => {
+    if (!item?.id) return;
+    setDraft({
+      date: dates[0]?.key || '',
+      time: '',
+      partySize: Math.min(2, settings.maxPartySize),
+      phone: currentUser?.phone || '',
+      notes: ''
+    });
+  }, [item?.id]);
+
+  const slots = item ? reservationSlotsForDate(item, draft.date, reservations) : [];
+  const selectedSlot = slots.find((slot) => slot.time === draft.time);
+  const canReserve = Boolean(
+    draft.date
+    && draft.time
+    && selectedSlot?.available
+    && selectedSlot.remaining >= Number(draft.partySize)
+    && String(draft.phone || '').replace(/\D/g, '').length >= 8
+  );
+  const canWaitlist = Boolean(
+    draft.date
+    && String(draft.phone || '').replace(/\D/g, '').length >= 8
+    && (!selectedSlot || !selectedSlot.available || selectedSlot.remaining < Number(draft.partySize))
+  );
+
+  if (!item) return null;
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.reservationBackdrop}>
+        <View style={styles.reservationSheet}>
+          <View style={styles.reservationHandle} />
+          <View style={styles.reservationHeader}>
+            <View style={styles.reservationHeaderCopy}>
+              <Text style={styles.reservationEyebrow}>Reserva pelo Dine</Text>
+              <Text style={styles.reservationTitle}>{item.name}</Text>
+              <Text style={styles.reservationSubtitle}>{settings.autoConfirm ? 'Confirmação imediata conforme disponibilidade.' : 'O restaurante confirmará sua solicitação.'}</Text>
+            </View>
+            <Pressable accessibilityLabel="Fechar reserva" onPress={onClose} style={styles.floatButton}>
+              <Ionicons name="close" size={22} color={colors.ink} />
+            </Pressable>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            <Text style={styles.reservationFieldLabel}>Escolha o dia</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.reservationDateRow}>
+              {dates.map((date) => (
+                <Pressable
+                  key={date.key}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Reservar em ${date.fullLabel}`}
+                  onPress={() => setDraft((current) => ({ ...current, date: date.key, time: '' }))}
+                  style={[styles.reservationDateCard, draft.date === date.key && styles.reservationDateCardActive]}
+                >
+                  <Text style={[styles.reservationDateWeekday, draft.date === date.key && styles.reservationDateTextActive]}>{date.weekday}</Text>
+                  <Text style={[styles.reservationDateDay, draft.date === date.key && styles.reservationDateTextActive]}>{date.day}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
+            <Text style={styles.reservationFieldLabel}>Horário</Text>
+            <View style={styles.reservationSlotGrid}>
+              {slots.length ? slots.map((slot) => {
+                const fitsParty = slot.remaining >= Number(draft.partySize);
+                const available = slot.available && fitsParty;
+                const selected = draft.time === slot.time;
+                return (
+                  <Pressable
+                    key={slot.time}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${slot.time}${available ? `, ${slot.remaining} lugares` : ', lotado'}`}
+                    onPress={() => setDraft((current) => ({ ...current, time: slot.time }))}
+                    style={[styles.reservationSlot, selected && styles.reservationSlotSelected, !available && styles.reservationSlotFull]}
+                  >
+                    <Text style={[styles.reservationSlotTime, selected && styles.reservationSlotTimeSelected]}>{slot.time}</Text>
+                    <Text style={[styles.reservationSlotMeta, selected && styles.reservationSlotMetaSelected]}>{available ? `${slot.remaining} vagas` : 'Lista de espera'}</Text>
+                  </Pressable>
+                );
+              }) : (
+                <View style={styles.reservationNoSlots}>
+                  <Ionicons name="time-outline" size={24} color={colors.redDark} />
+                  <Text style={styles.reservationNoSlotsTitle}>Sem horários disponíveis neste dia</Text>
+                  <Text style={styles.reservationNoSlotsText}>Você ainda pode entrar na lista de espera.</Text>
+                </View>
+              )}
+            </View>
+
+            <Text style={styles.reservationFieldLabel}>Tamanho do grupo</Text>
+            <View style={styles.reservationPartyRow}>
+              {Array.from({ length: Math.min(settings.maxPartySize, 8) }, (_, index) => index + 1).map((size) => (
+                <Pressable key={size} onPress={() => setDraft((current) => ({ ...current, partySize: size, time: '' }))} style={[styles.reservationPartyChip, Number(draft.partySize) === size && styles.reservationPartyChipActive]}>
+                  <Text style={[styles.reservationPartyText, Number(draft.partySize) === size && styles.reservationPartyTextActive]}>{size}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Field
+              label="Telefone para contato"
+              value={draft.phone}
+              onChangeText={(value) => setDraft((current) => ({ ...current, phone: value }))}
+              keyboardType="phone-pad"
+              placeholder="(17) 99999-9999"
+              hint="Usado somente para atualizações desta reserva."
+            />
+            <Field
+              label="Observações"
+              value={draft.notes}
+              onChangeText={(value) => setDraft((current) => ({ ...current, notes: value }))}
+              placeholder="Acessibilidade, cadeira infantil ou ocasião especial"
+              multiline
+            />
+          </ScrollView>
+
+          <View style={styles.reservationFooter}>
+            {canWaitlist ? (
+              <AppButton onPress={() => onWaitlist(item, draft)}>Entrar na lista de espera</AppButton>
+            ) : (
+              <AppButton disabled={!canReserve} onPress={() => onReserve(item, draft)}>
+                {settings.autoConfirm ? 'Confirmar reserva' : 'Solicitar reserva'}
+              </AppButton>
+            )}
+            {!String(draft.phone || '').trim() ? <Text style={styles.reservationFooterHint}>Informe um telefone para continuar.</Text> : null}
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
 function RestaurantModal({
   item,
   onClose,
   onMaps,
   onWhatsApp,
+  onReserve,
   onClaim,
   reviews,
   reviewDraft,
@@ -6655,7 +7336,7 @@ function RestaurantModal({
   const menuItems = (item.menuItems || []).filter((dish) => dish?.name);
   const tabs = ['Comunidade', 'Cardápio', 'Sobre', 'Avaliações'];
   const renderActionButton = (icon, label, onPress, active = false) => (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.detailActionButton, active && styles.detailActionButtonActive, pressed && styles.activePress]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => [styles.detailActionButton, active && styles.detailActionButtonActive, pressed && styles.activePress]}>
       <Ionicons name={icon} size={18} color={active ? colors.card : colors.ink} />
       <Text style={[styles.detailActionButtonText, active && styles.detailActionButtonTextActive]} numberOfLines={1}>{label}</Text>
     </Pressable>
@@ -6717,7 +7398,7 @@ function RestaurantModal({
 
             <View style={styles.detailActionRow}>
               {renderActionButton('navigate-outline', 'Como chegar', () => onMaps(item), true)}
-              {renderActionButton('chatbubble-ellipses-outline', 'WhatsApp', () => onWhatsApp(item, false))}
+              {renderActionButton('calendar-outline', 'Reservar', () => onReserve(item))}
               {renderActionButton('camera-outline', 'Check-in', () => onCheckIn(item))}
               {renderActionButton('checkmark-circle-outline', 'Já conheci', () => onKnown(item))}
             </View>
@@ -6901,8 +7582,11 @@ function RestaurantModal({
                 </View>
                 <Text style={styles.detailAddress}>{item.address}</Text>
                 <View style={styles.detailAboutButtons}>
-                  <Pressable onPress={() => item.reservationUrl ? Linking.openURL(item.reservationUrl) : onWhatsApp(item, true)} style={styles.detailSecondaryButton}>
+                  <Pressable onPress={() => onReserve(item)} style={styles.detailSecondaryButton}>
                     <Text style={styles.detailSecondaryButtonText}>Reservar</Text>
+                  </Pressable>
+                  <Pressable onPress={() => onWhatsApp(item, false)} style={styles.detailSecondaryButton}>
+                    <Text style={styles.detailSecondaryButtonText}>WhatsApp</Text>
                   </Pressable>
                   <Pressable onPress={() => onClaim(item)} style={styles.detailSecondaryButton}>
                     <Text style={styles.detailSecondaryButtonText}>Reivindicar restaurante</Text>
@@ -7395,8 +8079,8 @@ function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, submitting = fa
 
   const login = mode === 'login';
   const title = login
-    ? 'Entre para descobrir seu próximo lugar favorito'
-    : 'Crie sua conta e compartilhe novas descobertas';
+    ? 'Entre no Dine'
+    : 'Como você quer usar o Dine?';
 
   const content = (
     <View style={styles.authFullForm}>
@@ -7409,7 +8093,7 @@ function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, submitting = fa
       <Image source={dineLogo} style={styles.authLogo} resizeMode="contain" />
       <Text style={styles.authTitle}>{title}</Text>
       <Text style={styles.authSubtitle}>
-        {login ? 'Sua próxima experiência gastronômica começa aqui.' : 'Sua conta fica pronta na hora, sem confirmação por e-mail.'}
+        {login ? 'A experiência certa será aberta de acordo com o seu tipo de conta.' : 'Escolha o perfil que combina com o que você quer fazer agora.'}
       </Text>
 
       <View accessibilityRole="tablist" style={styles.authModeTabs}>
@@ -7431,6 +8115,43 @@ function AuthModal({ mode, form, setForm, setMode, onSubmitAuth, submitting = fa
           );
         })}
       </View>
+
+      {!login ? (
+        <View style={styles.authAccountTypeGroup}>
+          <Text style={styles.authAccountTypeLabel}>Tipo de conta</Text>
+          <View accessibilityRole="radiogroup" style={styles.authAccountTypeList}>
+            {[
+              ['user', 'person-outline', 'Usuário', 'Descobrir, reservar e avaliar restaurantes.'],
+              ['restaurant_owner', 'storefront-outline', 'Dono de restaurante', 'Cadastrar e gerenciar seu estabelecimento.']
+            ].map(([value, icon, label, description]) => {
+              const selected = form.accountType === value;
+              return (
+                <Pressable
+                  key={value}
+                  accessibilityRole="radio"
+                  accessibilityLabel={`Conta de ${label}`}
+                  accessibilityState={{ checked: selected }}
+                  onPress={() => setForm({ ...form, accountType: value })}
+                  style={({ pressed }) => [
+                    styles.authAccountTypeCard,
+                    selected && styles.authAccountTypeCardSelected,
+                    pressed && styles.activePress
+                  ]}
+                >
+                  <View style={[styles.authAccountTypeIcon, selected && styles.authAccountTypeIconSelected]}>
+                    <Ionicons name={icon} size={22} color={selected ? colors.card : colors.redDark} />
+                  </View>
+                  <View style={styles.authAccountTypeCopy}>
+                    <Text style={[styles.authAccountTypeTitle, selected && styles.authAccountTypeTitleSelected]}>{label}</Text>
+                    <Text style={styles.authAccountTypeDescription}>{description}</Text>
+                  </View>
+                  <Ionicons name={selected ? 'checkmark-circle' : 'ellipse-outline'} size={23} color={selected ? colors.redDark : colors.muted} />
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.authFields}>
         {!login ? (
@@ -8695,6 +9416,17 @@ Object.assign(styles, {
   authModeTabActive: { borderBottomColor: colors.redDark },
   authModeTabText: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 14 },
   authModeTabTextActive: { color: colors.ink, fontFamily: 'Nunito_800ExtraBold' },
+  authAccountTypeGroup: { marginBottom: 20, gap: 9 },
+  authAccountTypeLabel: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 13 },
+  authAccountTypeList: { gap: 10 },
+  authAccountTypeCard: { minHeight: 78, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(40, 40, 43, 0.16)', backgroundColor: '#FFFFFF', paddingHorizontal: 13, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  authAccountTypeCardSelected: { borderColor: colors.redDark, backgroundColor: '#FFF7F1' },
+  authAccountTypeIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#FFF0E8', alignItems: 'center', justifyContent: 'center' },
+  authAccountTypeIconSelected: { backgroundColor: colors.redDark },
+  authAccountTypeCopy: { flex: 1, minWidth: 0, gap: 2 },
+  authAccountTypeTitle: { color: colors.ink, fontFamily: 'Nunito_800ExtraBold', fontSize: 15 },
+  authAccountTypeTitleSelected: { color: colors.redDark },
+  authAccountTypeDescription: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17 },
   authFields: { gap: 15 },
   authField: { gap: 7 },
   authFieldLabel: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 13 },
@@ -9104,6 +9836,130 @@ Object.assign(styles, {
   registerBackActionText: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
   registerNextAction: { minHeight: 44, borderRadius: 8, backgroundColor: colors.redDark, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
   registerNextActionText: { color: colors.card, fontFamily: bodyFont, fontSize: 12 },
+  ownerWorkspaceHeader: { minHeight: 68, marginBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  ownerWorkspaceBrand: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  ownerWorkspaceLogo: { width: 62, height: 38 },
+  ownerWorkspaceEyebrow: { color: colors.redDark, fontFamily: bodyFont, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.8 },
+  ownerWorkspaceTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 19 },
+  ownerWorkspaceConsumerButton: { minHeight: 40, borderRadius: 10, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 11, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  ownerWorkspaceConsumerText: { color: colors.ink, fontFamily: bodyFont, fontSize: 11 },
+  ownerRestaurantSwitcher: { gap: 9, paddingBottom: 14 },
+  ownerRestaurantSwitchCard: { width: 210, minHeight: 62, borderRadius: 13, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  ownerRestaurantSwitchCardActive: { borderColor: colors.redDark, backgroundColor: '#FFF7F1' },
+  ownerRestaurantSwitchImage: { width: 42, height: 42, borderRadius: 10, backgroundColor: colors.cream },
+  ownerRestaurantSwitchName: { maxWidth: 138, color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  ownerRestaurantSwitchMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10 },
+  ownerWorkspaceEmpty: { minHeight: 320, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 24, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  ownerWorkspaceEmptyIcon: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#FFF1E8', alignItems: 'center', justifyContent: 'center' },
+  ownerSelectedRestaurantHeader: { minHeight: 74, borderRadius: 15, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 11 },
+  ownerSelectedRestaurantLogo: { width: 50, height: 50, borderRadius: 12, backgroundColor: colors.cream },
+  ownerSelectedRestaurantCopy: { flex: 1, minWidth: 0 },
+  ownerSelectedRestaurantName: { color: colors.ink, fontFamily: titleFont, fontSize: 18 },
+  ownerSelectedRestaurantMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11 },
+  ownerWorkspaceTabs: { gap: 7, paddingVertical: 14 },
+  ownerWorkspaceTab: { minHeight: 40, borderRadius: 10, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  ownerWorkspaceTabActive: { borderColor: colors.redDark, backgroundColor: colors.redDark },
+  ownerWorkspaceTabText: { color: colors.ink, fontFamily: bodyFont, fontSize: 11 },
+  ownerWorkspaceTabTextActive: { color: colors.card },
+  ownerWorkspaceSection: { gap: 14 },
+  ownerOverviewHero: { minHeight: 128, borderRadius: 18, backgroundColor: colors.ink, padding: 19, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  ownerOverviewEyebrow: { color: 'rgba(255,255,255,0.66)', fontFamily: bodyFont, fontSize: 11 },
+  ownerOverviewTitle: { color: colors.card, fontFamily: titleFont, fontSize: 28, marginTop: 3 },
+  ownerOverviewText: { color: 'rgba(255,255,255,0.78)', fontFamily: 'Nunito_400Regular', fontSize: 12, marginTop: 2 },
+  ownerOverviewHeroIcon: { width: 58, height: 58, borderRadius: 29, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  bookingSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9, marginBottom: 4 },
+  bookingSummaryCard: { width: '47%', minHeight: 94, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 12, justifyContent: 'center' },
+  bookingSummaryValue: { color: colors.ink, fontFamily: titleFont, fontSize: 24, marginTop: 5 },
+  bookingSummaryLabel: { color: colors.muted, fontFamily: bodyFont, fontSize: 10 },
+  ownerQuickActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
+  ownerQuickAction: { flexGrow: 1, flexBasis: 180, minHeight: 118, borderRadius: 15, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 14, gap: 5 },
+  ownerQuickActionTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 13 },
+  ownerQuickActionText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11, lineHeight: 16 },
+  ownerSectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  ownerSectionTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 18 },
+  ownerSectionSubtitle: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11, lineHeight: 16 },
+  ownerSectionEmptyText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, paddingVertical: 18, textAlign: 'center' },
+  bookingList: { gap: 9 },
+  bookingCard: { borderRadius: 15, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 13, gap: 9 },
+  bookingCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  bookingRestaurantAvatar: { width: 44, height: 44, borderRadius: 12, backgroundColor: '#FFF1E8', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  bookingRestaurantImage: { width: '100%', height: '100%' },
+  bookingCardCopy: { flex: 1, minWidth: 130 },
+  bookingRestaurantName: { color: colors.ink, fontFamily: bodyFont, fontSize: 13 },
+  bookingMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 15 },
+  bookingNotes: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 15 },
+  bookingStatusPill: { maxWidth: 128, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 5 },
+  bookingStatusText: { fontFamily: bodyFont, fontSize: 9, textAlign: 'center' },
+  bookingStatusInline: { fontFamily: bodyFont, fontSize: 10, marginTop: 2 },
+  bookingCancelButton: { alignSelf: 'flex-start', minHeight: 32, borderRadius: 8, borderWidth: 1, borderColor: 'rgba(241,61,11,0.25)', paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  bookingCancelText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 10 },
+  bookingWaitPosition: { minWidth: 52, alignItems: 'center' },
+  bookingWaitPositionValue: { color: colors.redDark, fontFamily: titleFont, fontSize: 20 },
+  bookingWaitPositionLabel: { color: colors.muted, fontFamily: bodyFont, fontSize: 8 },
+  ownerBookingCard: { minHeight: 82, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 11, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  ownerBookingTime: { width: 52, alignItems: 'center' },
+  ownerBookingTimeValue: { color: colors.redDark, fontFamily: titleFont, fontSize: 18 },
+  ownerBookingDate: { color: colors.muted, fontFamily: bodyFont, fontSize: 9 },
+  ownerBookingActions: { flexDirection: 'row', gap: 5 },
+  ownerBookingPrimary: { width: 34, height: 34, borderRadius: 9, backgroundColor: colors.green, alignItems: 'center', justifyContent: 'center' },
+  ownerBookingSecondary: { width: 34, height: 34, borderRadius: 9, backgroundColor: '#FFF1EC', alignItems: 'center', justifyContent: 'center' },
+  ownerWaitPosition: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#FFF1E8', alignItems: 'center', justifyContent: 'center' },
+  ownerWaitPositionText: { color: colors.redDark, fontFamily: titleFont, fontSize: 17 },
+  availabilitySettingCard: { minHeight: 74, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 13, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  availabilitySettingCopy: { flex: 1, minWidth: 0 },
+  availabilityNumberGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
+  availabilityNumberCard: { flexGrow: 1, flexBasis: 160, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 13, gap: 10 },
+  availabilityStepper: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 9 },
+  availabilityStepButton: { width: 36, height: 36, borderRadius: 10, borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center' },
+  availabilityStepValue: { color: colors.ink, fontFamily: titleFont, fontSize: 22 },
+  availabilityWeekList: { gap: 8 },
+  availabilityDayCard: { minHeight: 56, borderRadius: 12, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 9, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  availabilityDayCardDisabled: { opacity: 0.62, backgroundColor: '#F5F3F0' },
+  availabilityDayToggle: { width: 28, height: 28, borderRadius: 8, backgroundColor: '#ECE9E5', alignItems: 'center', justifyContent: 'center' },
+  availabilityDayToggleActive: { backgroundColor: colors.green },
+  availabilityDayLabel: { width: 64, color: colors.ink, fontFamily: bodyFont, fontSize: 10 },
+  availabilityTimeInput: { width: 60, minHeight: 34, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 7, color: colors.ink, fontFamily: bodyFont, fontSize: 10, textAlign: 'center' },
+  availabilityTimeInputDisabled: { backgroundColor: '#ECE9E5', color: colors.muted },
+  availabilityTimeSeparator: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9 },
+  ownerProfilePreview: { overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
+  ownerProfilePreviewCover: { width: '100%', height: 180, backgroundColor: colors.cream },
+  ownerProfilePreviewBody: { padding: 14, flexDirection: 'row', gap: 11 },
+  ownerProfilePreviewLogo: { width: 58, height: 58, borderRadius: 14, backgroundColor: colors.cream },
+  ownerProfilePreviewCopy: { flex: 1, minWidth: 0, gap: 3 },
+  ownerWorkspaceFooterActions: { marginTop: 18, paddingTop: 14, borderTopWidth: 1, borderTopColor: colors.line, gap: 8 },
+  reservationBackdrop: { flex: 1, backgroundColor: 'rgba(20,20,20,0.48)', justifyContent: 'flex-end' },
+  reservationSheet: { width: '100%', maxWidth: 620, maxHeight: '94%', alignSelf: 'center', borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: colors.bg, paddingHorizontal: 18, paddingBottom: 20 },
+  reservationHandle: { width: 42, height: 4, borderRadius: 2, backgroundColor: '#D8D3CE', alignSelf: 'center', marginTop: 9, marginBottom: 12 },
+  reservationHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 14 },
+  reservationHeaderCopy: { flex: 1, minWidth: 0 },
+  reservationEyebrow: { color: colors.redDark, fontFamily: bodyFont, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.8 },
+  reservationTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 24, lineHeight: 29 },
+  reservationSubtitle: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11, lineHeight: 16 },
+  reservationFieldLabel: { color: colors.ink, fontFamily: bodyFont, fontSize: 12, marginTop: 11, marginBottom: 8 },
+  reservationDateRow: { gap: 7, paddingBottom: 2 },
+  reservationDateCard: { width: 70, minHeight: 62, borderRadius: 12, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' },
+  reservationDateCardActive: { backgroundColor: colors.redDark, borderColor: colors.redDark },
+  reservationDateWeekday: { color: colors.muted, fontFamily: bodyFont, fontSize: 9, textTransform: 'uppercase' },
+  reservationDateDay: { color: colors.ink, fontFamily: titleFont, fontSize: 16 },
+  reservationDateTextActive: { color: colors.card },
+  reservationSlotGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  reservationSlot: { minWidth: 88, minHeight: 52, borderRadius: 11, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  reservationSlotSelected: { backgroundColor: colors.ink, borderColor: colors.ink },
+  reservationSlotFull: { backgroundColor: '#F5F3F0', borderStyle: 'dashed' },
+  reservationSlotTime: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  reservationSlotTimeSelected: { color: colors.card },
+  reservationSlotMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 8 },
+  reservationSlotMetaSelected: { color: 'rgba(255,255,255,0.72)' },
+  reservationNoSlots: { width: '100%', minHeight: 104, borderRadius: 13, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', gap: 3, padding: 12 },
+  reservationNoSlotsTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 12, textAlign: 'center' },
+  reservationNoSlotsText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, textAlign: 'center' },
+  reservationPartyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  reservationPartyChip: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' },
+  reservationPartyChipActive: { backgroundColor: colors.redDark, borderColor: colors.redDark },
+  reservationPartyText: { color: colors.ink, fontFamily: bodyFont, fontSize: 11 },
+  reservationPartyTextActive: { color: colors.card },
+  reservationFooter: { paddingTop: 13, gap: 6 },
+  reservationFooterHint: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9, textAlign: 'center' },
   settingsDangerZone: { marginTop: 2, marginBottom: 20 },
   settingsLogoutButton: { minHeight: 50, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(200,70,37,0.28)', backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   settingsLogoutText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 14 }
