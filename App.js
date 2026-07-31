@@ -30,11 +30,14 @@ import { Nunito_700Bold } from '@expo-google-fonts/nunito/700Bold';
 import { Nunito_800ExtraBold } from '@expo-google-fonts/nunito/800ExtraBold';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import {
   fetchFavoritesFromDb,
   fetchAllRestaurantsFromDb,
+  fetchExternalPlacesFromDb,
+  fetchExternalPlaceClaimsFromDb,
   fetchOwnerRestaurantsFromDb,
   fetchPendingRestaurantsFromDb,
   fetchReviewsFromDb,
@@ -51,6 +54,7 @@ import {
   signUpWithSupabase,
   addFeedCommentToDb,
   blockAccountInDb,
+  claimExternalPlaceInDb,
   claimRestaurantInDb,
   createInviteLinkInDb,
   createFeedPostInDb,
@@ -74,6 +78,7 @@ import {
   updateRestaurantInDb,
   updateReservationStatusSecureInDb,
   updateRestaurantStatusInDb,
+  updateExternalPlaceClaimStatusInDb,
   updateReviewInDb,
   setFeedReactionInDb,
   setProfileFollowInDb,
@@ -95,6 +100,7 @@ import {
   seedUsers,
   tabs
 } from './src/data/appData';
+import externalPlacesSeed from './src/data/externalPlacesSeed.json';
 import {
   defaultAddressCity,
   defaultAddressState,
@@ -366,7 +372,8 @@ const storageKeys = {
   onboardingSeen: 'dineOnboardingSeenRN',
   restaurantDraft: 'dineRestaurantDraftRN',
   reservations: 'dineReservationsRN',
-  waitlist: 'dineWaitlistRN'
+  waitlist: 'dineWaitlistRN',
+  externalClaims: 'dineExternalClaimsRN'
 };
 const restaurantCategoryOptions = ['Brasileira', 'Hamburgueria', 'Italiana', 'Japonesa', 'Pizzaria', 'Cafeteria', 'Bar', 'Doces'];
 const restaurantPriceOptions = ['$', '$$', '$$$', '$$$$'];
@@ -499,6 +506,29 @@ const collectionCurations = [
 
 function normalize(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+function formatCnpj(value) {
+  const digits = String(value || '').replace(/\D/g, '').slice(0, 14);
+  return digits
+    .replace(/^(\d{2})(\d)/, '$1.$2')
+    .replace(/^(\d{2})\.(\d{3})(\d)/, '$1.$2.$3')
+    .replace(/\.(\d{3})(\d)/, '.$1/$2')
+    .replace(/(\d{4})(\d)/, '$1-$2');
+}
+
+function isValidCnpj(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length !== 14 || /^(\d)\1{13}$/.test(digits)) return false;
+  const calculateDigit = (length) => {
+    const weights = length === 12
+      ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+      : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    const total = digits.slice(0, length).split('').reduce((sum, digit, index) => sum + Number(digit) * weights[index], 0);
+    const remainder = total % 11;
+    return remainder < 2 ? 0 : 11 - remainder;
+  };
+  return calculateDigit(12) === Number(digits[12]) && calculateDigit(13) === Number(digits[13]);
 }
 
 const blockedContentTerms = [
@@ -1282,9 +1312,12 @@ function matchesRestaurantQuery(item, query) {
 
 function PartnerMap({
   restaurants,
+  externalPlaces = [],
   onSelect,
+  onSelectExternal,
   onFavorite,
   onDirections,
+  onClaimExternal,
   onLocate,
   favoriteNames = [],
   postCountsByRestaurant = {},
@@ -1300,6 +1333,7 @@ function PartnerMap({
   const [selectedMapItem, setSelectedMapItem] = useState(null);
   const webMapWidth = Math.max(320, width);
   const webMapHeight = 510;
+  const mapItems = [...restaurants, ...externalPlaces];
   const webMapRegion = region || rioPretoRegion;
   const webMapZoomLevel = webMapZoom(webMapRegion);
   const webMapCenterTileX = longitudeToTileX(webMapRegion.longitude, webMapZoomLevel);
@@ -1307,14 +1341,14 @@ function PartnerMap({
   const webMapCenterPixelX = webMapCenterTileX * webMapTileSize;
   const webMapCenterPixelY = webMapCenterTileY * webMapTileSize;
   useEffect(() => {
-    if (!restaurants.length) {
+    if (!mapItems.length) {
       setSelectedMapItem(null);
       return;
     }
-    if (!selectedMapItem || !restaurants.some((item) => item.id === selectedMapItem.id)) {
-      setSelectedMapItem(restaurants[0]);
+    if (!selectedMapItem || !mapItems.some((item) => item.id === selectedMapItem.id)) {
+      setSelectedMapItem(restaurants[0] || externalPlaces[0]);
     }
-  }, [restaurants, selectedMapItem]);
+  }, [externalPlaces, restaurants, selectedMapItem]);
   const webTiles = [];
   for (let x = Math.floor(webMapCenterTileX) - 2; x <= Math.floor(webMapCenterTileX) + 2; x += 1) {
     for (let y = Math.floor(webMapCenterTileY) - 2; y <= Math.floor(webMapCenterTileY) + 2; y += 1) {
@@ -1361,23 +1395,42 @@ function PartnerMap({
     setWebPanOffset({ x: 0, y: 0 });
   }
 
+  const webMarkerItems = [];
+  mapItems.slice(0, 48).forEach((item, index) => {
+    const point = webPointForItem(item, index);
+    const visible = point.left > -90 && point.left < webMapWidth + 90 && point.top > -40 && point.top < webMapHeight + 90;
+    if (!visible) return;
+    const overlaps = webMarkerItems.some((candidate) => (
+      Math.abs(candidate.point.left - point.left) < 38
+      && Math.abs(candidate.point.top - point.top) < 48
+    ));
+    if (!overlaps) webMarkerItems.push({ item, point });
+  });
+
   function renderSelectedMapCard() {
     if (!selectedMapItem) return null;
+    const external = Boolean(selectedMapItem.isExternal);
     const openStatus = getRestaurantOpenStatus(selectedMapItem);
     const favorite = favoriteNames.includes(selectedMapItem.name);
     return (
       <View style={styles.selectedMapCard}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Abrir restaurante ${selectedMapItem.name}`}
-          onPress={() => onSelect(selectedMapItem)}
+          accessibilityLabel={external ? `Abrir local não verificado ${selectedMapItem.name}` : `Abrir restaurante ${selectedMapItem.name}`}
+          onPress={() => external ? onSelectExternal?.(selectedMapItem) : onSelect(selectedMapItem)}
           style={styles.selectedMapMain}
         >
-          <Image source={imageSource(selectedMapItem.coverPhoto || selectedMapItem.image || selectedMapItem.logo)} style={styles.selectedMapImage} />
+          {external ? (
+            <View style={[styles.selectedMapImage, styles.selectedExternalMapImage]}>
+              <MaterialCommunityIcons name="silverware-fork-knife" size={34} color="#6F6A66" />
+            </View>
+          ) : (
+            <Image source={imageSource(selectedMapItem.coverPhoto || selectedMapItem.image || selectedMapItem.logo)} style={styles.selectedMapImage} />
+          )}
           <View style={styles.selectedMapCopy}>
             <View style={styles.selectedMapTitleRow}>
               <Text numberOfLines={1} style={styles.selectedMapName}>{selectedMapItem.name}</Text>
-              <Pressable
+              {!external ? <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={favorite ? 'Remover dos favoritos' : 'Salvar nos favoritos'}
                 hitSlop={8}
@@ -1388,35 +1441,52 @@ function PartnerMap({
                 style={styles.selectedMapSave}
               >
                 <Ionicons name={favorite ? 'bookmark' : 'bookmark-outline'} size={22} color={colors.redDark} />
-              </Pressable>
+              </Pressable> : null}
             </View>
-            <Text numberOfLines={1} style={styles.selectedMapMeta}>{selectedMapItem.type}</Text>
-            {postCountsByRestaurant[selectedMapItem.id] ? (
+            <Text numberOfLines={1} style={styles.selectedMapMeta}>
+              {external ? `${selectedMapItem.type} • Ainda não parceiro` : selectedMapItem.type}
+            </Text>
+            {external && selectedMapItem.address ? (
+              <Text numberOfLines={2} style={styles.selectedMapSocialMeta}>{selectedMapItem.address}</Text>
+            ) : null}
+            {!external && postCountsByRestaurant[selectedMapItem.id] ? (
               <Text numberOfLines={1} style={styles.selectedMapSocialMeta}>
                 {postCountsByRestaurant[selectedMapItem.id]} novidades da comunidade
               </Text>
             ) : null}
             <View style={styles.selectedMapStatusRow}>
-              <Ionicons name="star" size={14} color={colors.redDark} />
-              <Text style={styles.selectedMapRating}>{scoreValue(selectedMapItem).toFixed(1).replace('.', ',')}</Text>
-              <Text style={styles.selectedMapDivider}>•</Text>
+              {external ? <Ionicons name="location-outline" size={14} color={colors.muted} /> : <Ionicons name="star" size={14} color={colors.redDark} />}
+              {!external ? <Text style={styles.selectedMapRating}>{scoreValue(selectedMapItem).toFixed(1).replace('.', ',')}</Text> : null}
+              {!external ? <Text style={styles.selectedMapDivider}>•</Text> : null}
               <Text style={styles.selectedMapRating}>{formatDistance(selectedMapItem.distanceKm)}</Text>
-              <Text style={styles.selectedMapDivider}>•</Text>
-              <Text style={styles.selectedMapRating}>{selectedMapItem.price || '$$'}</Text>
-              <Text style={styles.selectedMapDivider}>•</Text>
-              <Text style={[styles.selectedMapStatus, openStatus.open && styles.selectedMapStatusOpen]}>{openStatus.label}</Text>
+              {!external ? <Text style={styles.selectedMapDivider}>•</Text> : null}
+              {!external ? <Text style={styles.selectedMapRating}>{selectedMapItem.price || '$$'}</Text> : null}
+              {!external ? <Text style={styles.selectedMapDivider}>•</Text> : null}
+              {!external ? <Text style={[styles.selectedMapStatus, openStatus.open && styles.selectedMapStatusOpen]}>{openStatus.label}</Text> : null}
             </View>
           </View>
         </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Traçar rota para ${selectedMapItem.name}`}
-          onPress={() => onDirections?.(selectedMapItem)}
-          style={styles.selectedMapRoute}
-        >
-          <Ionicons name="navigate" size={18} color="#FFFFFF" />
-          <Text style={styles.selectedMapRouteText}>Como chegar</Text>
-        </Pressable>
+        <View style={styles.selectedMapActionRow}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Traçar rota para ${selectedMapItem.name}`}
+            onPress={() => onDirections?.(selectedMapItem)}
+            style={styles.selectedMapRoute}
+          >
+            <Ionicons name="navigate" size={18} color="#FFFFFF" />
+            <Text style={styles.selectedMapRouteText}>Como chegar</Text>
+          </Pressable>
+          {external ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Reivindicar ${selectedMapItem.name}`}
+              onPress={() => onClaimExternal?.(selectedMapItem)}
+              style={styles.selectedMapClaim}
+            >
+              <Text style={styles.selectedMapClaimText}>É seu?</Text>
+            </Pressable>
+          ) : null}
+        </View>
       </View>
     );
   }
@@ -1457,6 +1527,23 @@ function PartnerMap({
                     <Text style={styles.mapMarkerActivityText}>{Math.min(9, postCountsByRestaurant[item.id])}</Text>
                   </View>
                 ) : null}
+              </View>
+            </Marker>
+          ))}
+          {externalPlaces.map((item, index) => (
+            <Marker
+              key={item.id}
+              coordinate={item.coordinate || coordinateForRestaurant(item, index)}
+              title={item.name}
+              description={`${item.type} • Ainda não parceiro do Dine`}
+              onPress={() => setSelectedMapItem(item)}
+              anchor={{ x: 0.5, y: 1 }}
+            >
+              <View style={[styles.nativeExternalMarker, selectedMapItem?.id === item.id && styles.nativeExternalMarkerSelected]}>
+                <View style={styles.nativeExternalMarkerDot}>
+                  <MaterialCommunityIcons name="silverware-fork-knife" size={17} color="#FFFFFF" />
+                </View>
+                <View style={styles.nativeExternalMarkerTip} />
               </View>
             </Marker>
           ))}
@@ -1515,23 +1602,31 @@ function PartnerMap({
           <Ionicons name="navigate" size={16} color={colors.redDark} />
           <Text style={styles.mapCompassText}>Dine</Text>
         </View>
-        {restaurants.slice(0, 5).map((item, index) => {
-          const point = webPointForItem(item, index);
-          const visible = point.left > -90 && point.left < webMapWidth + 90 && point.top > -40 && point.top < webMapHeight + 90;
-          if (!visible) return null;
+        {webMarkerItems.map(({ item, point }) => {
           return (
             <Pressable
               key={item.id}
               accessibilityRole="button"
-              accessibilityLabel={`Selecionar restaurante ${item.name}`}
+              accessibilityLabel={item.isExternal ? `Selecionar local não verificado ${item.name}` : `Selecionar restaurante ${item.name}`}
               onPress={() => setSelectedMapItem(item)}
               style={[styles.webMapMarker, { left: point.left, top: point.top }]}
             >
-              <View style={[styles.webMapMarkerDot, selectedMapItem?.id === item.id && styles.webMapMarkerDotSelected]}>
-                <Image source={imageSource(item.logo || item.coverPhoto || item.image)} style={styles.webMapMarkerPhoto} />
+              <View style={[
+                styles.webMapMarkerDot,
+                item.isExternal && styles.webExternalMapMarkerDot,
+                selectedMapItem?.id === item.id && styles.webMapMarkerDotSelected,
+                item.isExternal && selectedMapItem?.id === item.id && styles.webExternalMapMarkerDotSelected
+              ]}>
+                {item.isExternal
+                  ? <MaterialCommunityIcons name="silverware-fork-knife" size={16} color="#FFFFFF" />
+                  : <Image source={imageSource(item.logo || item.coverPhoto || item.image)} style={styles.webMapMarkerPhoto} />}
               </View>
-              <View style={[styles.webMapMarkerTip, selectedMapItem?.id === item.id && styles.webMapMarkerTipSelected]} />
-              {postCountsByRestaurant[item.id] ? (
+              <View style={[
+                styles.webMapMarkerTip,
+                item.isExternal && styles.webExternalMapMarkerTip,
+                selectedMapItem?.id === item.id && styles.webMapMarkerTipSelected
+              ]} />
+              {!item.isExternal && postCountsByRestaurant[item.id] ? (
                 <View style={styles.mapMarkerActivityBadge}>
                   <Text style={styles.mapMarkerActivityText}>{Math.min(9, postCountsByRestaurant[item.id])}</Text>
                 </View>
@@ -1624,12 +1719,19 @@ export default function App() {
   });
   const [tab, setTab] = useState('Explorar');
   const [restaurants, setRestaurants] = useState(seedRestaurants);
+  const [externalPlaces, setExternalPlaces] = useState(externalPlacesSeed);
   const [favorites, setFavorites] = useState([]);
   const [users, setUsers] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [query, setQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedRestaurant, setSelectedRestaurant] = useState(null);
+  const [selectedExternalPlace, setSelectedExternalPlace] = useState(null);
+  const [externalClaimPlace, setExternalClaimPlace] = useState(null);
+  const [externalClaimDraft, setExternalClaimDraft] = useState({ claimantName: '', claimantPhone: '', claimantCnpj: '', restaurantName: '', notes: '' });
+  const [externalClaimErrors, setExternalClaimErrors] = useState({});
+  const [externalClaimSubmitting, setExternalClaimSubmitting] = useState(false);
+  const [externalPlaceClaims, setExternalPlaceClaims] = useState([]);
   const [authMode, setAuthMode] = useState(null);
   const [authError, setAuthError] = useState('');
   const [pendingAction, setPendingAction] = useState(null);
@@ -1777,7 +1879,7 @@ export default function App() {
   useEffect(() => {
     async function load() {
       try {
-        const [storedRestaurants, storedFavorites, storedUsers, storedCurrentUser, storedOnboardingSeen, storedFeedPosts, storedFeedReactions, storedReservations, storedWaitlist] = await Promise.all([
+        const [storedRestaurants, storedFavorites, storedUsers, storedCurrentUser, storedOnboardingSeen, storedFeedPosts, storedFeedReactions, storedReservations, storedWaitlist, storedExternalClaims] = await Promise.all([
           AsyncStorage.getItem(storageKeys.restaurants),
           AsyncStorage.getItem(storageKeys.favorites),
           AsyncStorage.getItem(storageKeys.users),
@@ -1786,7 +1888,8 @@ export default function App() {
           AsyncStorage.getItem(storageKeys.feedPosts),
           AsyncStorage.getItem(storageKeys.feedReactions),
           AsyncStorage.getItem(storageKeys.reservations),
-          AsyncStorage.getItem(storageKeys.waitlist)
+          AsyncStorage.getItem(storageKeys.waitlist),
+          AsyncStorage.getItem(storageKeys.externalClaims)
         ]);
         const storedRestaurantCoordinates = await AsyncStorage.getItem(storageKeys.restaurantCoordinates);
         let localUser = storedCurrentUser ? normalizeDemoAccount(JSON.parse(storedCurrentUser)) : null;
@@ -1803,6 +1906,7 @@ export default function App() {
         const localFeedReactions = storedFeedReactions ? JSON.parse(storedFeedReactions) : {};
         if (storedReservations) setReservations(JSON.parse(storedReservations));
         if (storedWaitlist) setWaitlistEntries(JSON.parse(storedWaitlist));
+        if (storedExternalClaims) setExternalPlaceClaims(JSON.parse(storedExternalClaims));
         if (localFeedPosts.length) setCustomFeedPosts(localFeedPosts);
         if (Object.keys(localFeedReactions).length) setFeedReactions(localFeedReactions);
         if (storedRestaurantCoordinates) {
@@ -1839,6 +1943,8 @@ export default function App() {
           }
           const remoteRestaurants = await fetchRestaurantsFromDb();
           if (remoteRestaurants?.length) setRestaurants(mergeSeedRestaurantMenus(remoteRestaurants));
+          const remoteExternalPlaces = await fetchExternalPlacesFromDb().catch(() => null);
+          if (remoteExternalPlaces?.length) setExternalPlaces(remoteExternalPlaces);
           if (localUser) {
             const remoteFavorites = await fetchFavoritesFromDb(localUser.id);
             if (remoteFavorites) setFavorites(remoteFavorites);
@@ -1901,6 +2007,11 @@ export default function App() {
     if (!hydrated) return;
     AsyncStorage.setItem(storageKeys.waitlist, JSON.stringify(waitlistEntries));
   }, [hydrated, waitlistEntries]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    AsyncStorage.setItem(storageKeys.externalClaims, JSON.stringify(externalPlaceClaims));
+  }, [externalPlaceClaims, hydrated]);
 
   useEffect(() => {
     if (activeScreen?.name !== 'restaurantRegister' || registerStep !== 1 || form.addressLookupReady) {
@@ -2058,6 +2169,11 @@ export default function App() {
           if (items) setPendingRestaurants(items);
         })
         .catch(() => {});
+      fetchExternalPlaceClaimsFromDb()
+        .then((items) => {
+          if (items) setExternalPlaceClaims(items);
+        })
+        .catch(() => {});
     } else {
       fetchOwnerRestaurantsFromDb(currentUser.id)
         .then((items) => {
@@ -2170,6 +2286,45 @@ export default function App() {
   }, [query, selectedCategory, publicRestaurants, radiusKm, searchCenter, userLocation]);
 
   const filteredRestaurants = nearbyRestaurants;
+  const externalMapPlaces = useMemo(() => {
+    const partnerNames = new Set(publicRestaurants.map((item) => normalize(item.name)));
+    const seen = new Set();
+    const needle = normalize(query);
+    const categoryNeedle = normalize(selectedCategory);
+    const partnerOnlyFilters = ['aberto agora', 'ate r$80', '4,5+', 'ao ar livre', 'reserva'];
+    return externalPlaces
+      .map((item, index) => {
+        const coordinate = coordinateForRestaurant(item, index);
+        const distanceFromUser = distanceKm(userLocation, coordinate);
+        const distanceFromArea = distanceKm(searchCenter, coordinate);
+        return {
+          ...item,
+          isExternal: true,
+          coordinate,
+          distanceKm: distanceFromUser ?? distanceFromArea,
+          distanceFromAreaKm: distanceFromArea
+        };
+      })
+      .filter((item) => {
+        const normalizedName = normalize(item.name);
+        if (!normalizedName || partnerNames.has(normalizedName)) return false;
+        const dedupeKey = `${normalizedName}:${item.coordinate.latitude.toFixed(3)}:${item.coordinate.longitude.toFixed(3)}`;
+        if (seen.has(dedupeKey)) return false;
+        seen.add(dedupeKey);
+        return true;
+      })
+      .filter((item) => {
+        if (!needle) return true;
+        return normalize(`${item.name} ${item.type} ${item.category} ${item.address} ${item.city}`).includes(needle);
+      })
+      .filter((item) => {
+        if (!categoryNeedle) return true;
+        if (partnerOnlyFilters.includes(categoryNeedle)) return false;
+        return normalize(`${item.type} ${item.category} ${item.basicCategory}`).includes(categoryNeedle);
+      })
+      .filter((item) => !Number.isFinite(item.distanceFromAreaKm) || item.distanceFromAreaKm <= radiusKm)
+      .sort((a, b) => (a.distanceKm ?? 999) - (b.distanceKm ?? 999));
+  }, [externalPlaces, publicRestaurants, query, radiusKm, searchCenter, selectedCategory, userLocation]);
   const topRestaurants = useMemo(() => {
     if (userLocation) return nearbyRestaurants;
     return [...publicRestaurants].sort((a, b) => scoreValue(b) - scoreValue(a));
@@ -2334,6 +2489,7 @@ export default function App() {
         Alert.alert('Conta de restaurante', 'Reservas como cliente estão disponíveis em contas de usuário.');
       }
     }
+    if (action?.type === 'external-claim' && action.place) beginExternalPlaceClaim(action.place, user);
   }
 
   function openAccountHome(user, newlyCreated = false) {
@@ -3598,6 +3754,8 @@ export default function App() {
       highlights: parseList(form.highlightsText),
       metrics: form.metrics || { views: 0, mapsClicks: 0, whatsappClicks: 0, reservationClicks: 0 },
       description: form.description || 'Restaurante cadastrado pelo app Dine.',
+      externalSource: form.externalSource || '',
+      externalSourceId: form.externalSourceId || '',
       approval: {
         status: form.status || 'pending',
         note: form.approvalNote || ''
@@ -3636,9 +3794,16 @@ export default function App() {
   }
 
   function openMaps(item) {
-    awardPoints('map', item.id);
-    recordRestaurantMetricInDb(item.id, 'mapsClicks').catch(() => {});
-    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${item.name} ${item.address} São José do Rio Preto SP`)}`);
+    if (!item?.isExternal) {
+      awardPoints('map', item.id);
+      recordRestaurantMetricInDb(item.id, 'mapsClicks').catch(() => {});
+    }
+    const latitude = Number(item?.coordinate?.latitude ?? item?.latitude);
+    const longitude = Number(item?.coordinate?.longitude ?? item?.longitude);
+    const destination = Number.isFinite(latitude) && Number.isFinite(longitude)
+      ? `${latitude},${longitude}`
+      : `${item.name} ${item.address} ${item.city || 'São José do Rio Preto'} ${item.state || 'SP'}`;
+    Linking.openURL(`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}`);
   }
 
   function showRestaurantOnMap(item) {
@@ -3876,25 +4041,27 @@ export default function App() {
     navigateTo('restaurantRegister');
   }
 
-  async function startRestaurantRegistration(defaults = {}) {
-    if (currentUser && !isRestaurantOwner && !isAdmin) {
+  async function startRestaurantRegistration(defaults = {}, actingUser = currentUser) {
+    const actingOwner = normalizeAccountType(actingUser?.accountType) === 'restaurant_owner';
+    const actingAdmin = Boolean(actingUser?.email && isAdminEmail(actingUser.email));
+    if (actingUser && !actingOwner && !actingAdmin) {
       Alert.alert('Acesso do restaurante', 'Este recurso está disponível para contas de dono de restaurante.');
       return;
     }
     setEditingRestaurant(null);
     let savedDraft = null;
-    if (!Object.keys(defaults).length && currentUser) {
+    if (!Object.keys(defaults).length && actingUser) {
       try {
         const storedDraft = JSON.parse(await AsyncStorage.getItem(storageKeys.restaurantDraft) || 'null');
-        if (storedDraft?.userId === currentUser.id) savedDraft = storedDraft;
+        if (storedDraft?.userId === actingUser.id) savedDraft = storedDraft;
       } catch (error) {
         savedDraft = null;
       }
     }
     setForm({
-      status: isAdmin ? 'published' : 'pending',
-      adminManaged: Boolean(isAdmin),
-      managedByAdminEmail: isAdmin ? currentUser?.email : '',
+      status: actingAdmin ? 'published' : 'pending',
+      adminManaged: Boolean(actingAdmin),
+      managedByAdminEmail: actingAdmin ? actingUser?.email : '',
       price: '$$',
       menuMode: 'later',
       menuDraftItems: [],
@@ -4397,7 +4564,19 @@ function postKey(restaurantId, postId) {
                 style={({ pressed }) => [styles.discoveryCampaignCard, { width: homeDiscoveryCardWidth }, pressed && styles.pressed]}
               >
                 <Image source={campaign.image} resizeMode="cover" style={styles.discoveryCampaignImage} />
-                <View style={styles.discoveryCampaignScrim} />
+                <LinearGradient
+                  colors={[
+                    'rgba(18,8,4,0.9)',
+                    'rgba(18,8,4,0.72)',
+                    'rgba(18,8,4,0.28)',
+                    'rgba(18,8,4,0)'
+                  ]}
+                  locations={[0, 0.38, 0.72, 1]}
+                  start={{ x: 0, y: 0.5 }}
+                  end={{ x: 1, y: 0.5 }}
+                  pointerEvents="none"
+                  style={styles.discoveryCampaignFade}
+                />
                 <Animated.View
                   pointerEvents="none"
                   style={[
@@ -4483,6 +4662,127 @@ function postKey(restaurantId, postId) {
         </View>
       </View>
     );
+  }
+
+  function beginExternalPlaceClaim(place, actingUser = currentUser) {
+    if (!actingUser && !requireLogin({ type: 'external-claim', place })) return;
+    const owner = normalizeAccountType(actingUser?.accountType) === 'restaurant_owner';
+    const admin = Boolean(actingUser?.email && isAdminEmail(actingUser.email));
+    if (!owner && !admin) {
+      Alert.alert(
+        'Conta de dono necessária',
+        'A reivindicação de um restaurante precisa ser feita por uma conta de dono de restaurante.'
+      );
+      return;
+    }
+
+    setSelectedExternalPlace(null);
+    setExternalClaimPlace(place);
+    setExternalClaimDraft({
+      claimantName: actingUser?.name || '',
+      claimantPhone: actingUser?.phone || '',
+      claimantCnpj: '',
+      restaurantName: place.name || '',
+      notes: ''
+    });
+    setExternalClaimErrors({});
+  }
+
+  async function submitExternalPlaceClaim() {
+    if (!externalClaimPlace || !currentUser || externalClaimSubmitting) return;
+    const errors = {};
+    if (String(externalClaimDraft.claimantName || '').trim().length < 3) errors.claimantName = 'Informe o nome completo do responsável.';
+    if (String(externalClaimDraft.claimantPhone || '').replace(/\D/g, '').length < 10) errors.claimantPhone = 'Informe um telefone com DDD.';
+    if (!isValidCnpj(externalClaimDraft.claimantCnpj)) errors.claimantCnpj = 'Informe um CNPJ válido.';
+    if (String(externalClaimDraft.restaurantName || '').trim().length < 2) errors.restaurantName = 'Confirme o nome do restaurante.';
+    if (Object.keys(errors).length) {
+      setExternalClaimErrors(errors);
+      return;
+    }
+
+    setExternalClaimSubmitting(true);
+    const localClaim = {
+      id: `claim-${Date.now()}`,
+      externalPlaceId: externalClaimPlace.id,
+      claimantId: currentUser.id,
+      claimantName: externalClaimDraft.claimantName.trim(),
+      claimantEmail: currentUser.email || '',
+      claimantPhone: externalClaimDraft.claimantPhone.replace(/\D/g, ''),
+      claimantCnpj: externalClaimDraft.claimantCnpj.replace(/\D/g, ''),
+      restaurantName: externalClaimDraft.restaurantName.trim(),
+      restaurantAddress: externalClaimPlace.address || '',
+      source: externalClaimPlace.source,
+      sourceId: externalClaimPlace.sourceId,
+      notes: externalClaimDraft.notes.trim(),
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    };
+    try {
+      let savedClaim = null;
+      if (supabaseAuthEnabled) savedClaim = await claimExternalPlaceInDb(externalClaimPlace, currentUser, externalClaimDraft);
+      const nextClaim = { ...localClaim, ...(savedClaim || {}) };
+      setExternalPlaceClaims((items) => [nextClaim, ...items.filter((item) => item.id !== nextClaim.id)]);
+      setExternalClaimPlace(null);
+      setExternalClaimDraft({ claimantName: '', claimantPhone: '', claimantCnpj: '', restaurantName: '', notes: '' });
+      if (activeScreen?.name === 'restaurantRegister') {
+        setForm({});
+        setRegisterStep(0);
+        navigateTo('restaurantPanel');
+      }
+      Alert.alert('Solicitação enviada', 'Seu pedido foi enviado para a Central Admin. Nenhum acesso será liberado antes da análise.');
+    } catch (error) {
+      const message = error?.message === 'EXTERNAL_PLACE_NOT_SYNCED'
+        ? 'Este local ainda não foi sincronizado com o backend.'
+        : 'Não foi possível enviar a solicitação agora. Tente novamente.';
+      Alert.alert('Reivindicação', message);
+    } finally {
+      setExternalClaimSubmitting(false);
+    }
+  }
+
+  async function reviewExternalPlaceClaim(claim, status) {
+    const rejectionReason = status === 'rejected' ? 'Dados não confirmados pelo administrador.' : '';
+    if (supabaseAuthEnabled && !String(claim.id).startsWith('claim-')) {
+      try {
+        const reviewedClaim = await updateExternalPlaceClaimStatusInDb(claim.id, status, currentUser, rejectionReason);
+        setExternalPlaceClaims((items) => items.map((item) => item.id === claim.id ? reviewedClaim : item));
+        if (status === 'approved') {
+          const [nextRestaurants, nextExternalPlaces] = await Promise.all([
+            fetchAllRestaurantsFromDb(),
+            fetchExternalPlacesFromDb()
+          ]);
+          if (nextRestaurants) setOwnerRestaurants(nextRestaurants);
+          if (nextExternalPlaces) setExternalPlaces(nextExternalPlaces);
+        }
+        return;
+      } catch (error) {
+        Alert.alert('Supabase', 'Não foi possível concluir a análise. Nenhum acesso foi alterado.');
+        return;
+      }
+    }
+    setExternalPlaceClaims((items) => items.map((item) => item.id === claim.id ? { ...item, status, rejectionReason, reviewedAt: new Date().toISOString() } : item));
+    if (status === 'approved') {
+      const place = externalPlaces.find((item) => item.source === claim.source && item.sourceId === claim.sourceId);
+      const draftRestaurant = {
+        id: `claimed-${claim.id}`,
+        ownerId: claim.claimantId,
+        ownerName: claim.claimantName,
+        ownerEmail: claim.claimantEmail,
+        name: claim.restaurantName,
+        type: place?.type || 'Restaurante',
+        district: place?.district || 'A confirmar',
+        address: claim.restaurantAddress || place?.address || '',
+        city: place?.city || defaultAddressCity,
+        state: place?.state || defaultAddressState,
+        latitude: place?.latitude,
+        longitude: place?.longitude,
+        status: 'draft',
+        description: 'Complete os dados deste perfil reivindicado antes de publicar.',
+        metrics: { views: 0, mapsClicks: 0, whatsappClicks: 0, reservationClicks: 0 }
+      };
+      setRestaurants((items) => items.some((item) => item.id === draftRestaurant.id) ? items : [draftRestaurant, ...items]);
+      setExternalPlaces((items) => items.filter((item) => !(item.source === claim.source && item.sourceId === claim.sourceId)));
+    }
   }
 
   function renderSearch() {
@@ -4585,9 +4885,12 @@ function postKey(restaurantId, postId) {
         ) : null}
         <PartnerMap
           restaurants={filteredRestaurants.slice(0, 12)}
+          externalPlaces={externalMapPlaces.slice(0, 24)}
           onSelect={setSelectedRestaurant}
+          onSelectExternal={setSelectedExternalPlace}
           onFavorite={toggleFavorite}
           onDirections={openMaps}
+          onClaimExternal={beginExternalPlaceClaim}
           onLocate={requestUserLocation}
           favoriteNames={favorites}
           postCountsByRestaurant={postCountsByRestaurant}
@@ -4599,7 +4902,11 @@ function postKey(restaurantId, postId) {
         />
         <View style={styles.mapSheet}>
           <View style={styles.sheetHandle} />
-          <SectionTitle title={`${filteredRestaurants.length} parceiros no raio`} action="Ver lista" onPress={() => navigateTo('results', { title: 'Parceiros nesta área' })} />
+          <SectionTitle title={`${filteredRestaurants.length} parceiros + ${externalMapPlaces.length} locais`} action="Ver parceiros" onPress={() => navigateTo('results', { title: 'Parceiros nesta área' })} />
+          <View style={styles.mapLegend}>
+            <View style={styles.mapLegendItem}><View style={styles.mapLegendPartnerDot} /><Text style={styles.mapLegendText}>Parceiro Dine</Text></View>
+            <View style={styles.mapLegendItem}><View style={styles.mapLegendExternalDot} /><Text style={styles.mapLegendText}>Ainda não parceiro</Text></View>
+          </View>
           {filteredRestaurants.length ? (
             <View style={styles.mapList}>
               {filteredRestaurants.slice(0, 8).map((item) => (
@@ -7010,9 +7317,11 @@ function postKey(restaurantId, postId) {
       ...pendingRestaurants,
       ...restaurants.filter((restaurant) => !pendingRestaurants.some((item) => item.id === restaurant.id))
     ].reduce((list, item) => (item?.id && !list.some((restaurant) => restaurant.id === item.id) ? [...list, item] : list), []);
+    const pendingExternalClaims = externalPlaceClaims.filter((claim) => claim.status === 'pending');
     const adminStats = [
       ['Restaurantes', allRestaurants.length],
       ['Pendentes', pendingRestaurants.length],
+      ['Reivindicações', pendingExternalClaims.length],
       ['Usuários', users.length],
       ['Favoritos', favorites.length]
     ];
@@ -7030,6 +7339,37 @@ function postKey(restaurantId, postId) {
             </View>
           ))}
         </View>
+        <SectionTitle title="Reivindicações de restaurantes" />
+        {pendingExternalClaims.length ? pendingExternalClaims.map((claim) => (
+          <View key={claim.id} style={styles.adminClaimCard}>
+            <View style={styles.adminClaimHeader}>
+              <View style={styles.adminClaimIcon}>
+                <Ionicons name="key-outline" size={22} color="#FFFFFF" />
+              </View>
+              <View style={styles.adminClaimHeaderCopy}>
+                <Text style={styles.adminClaimRestaurant}>{claim.restaurantName}</Text>
+                <Text numberOfLines={2} style={styles.adminClaimAddress}>{claim.restaurantAddress || 'Endereço não informado'}</Text>
+              </View>
+              <View style={styles.adminClaimStatus}><Text style={styles.adminClaimStatusText}>Pendente</Text></View>
+            </View>
+            <View style={styles.adminClaimDataGrid}>
+              <View style={styles.adminClaimData}><Text style={styles.adminClaimDataLabel}>Responsável</Text><Text style={styles.adminClaimDataValue}>{claim.claimantName}</Text></View>
+              <View style={styles.adminClaimData}><Text style={styles.adminClaimDataLabel}>Telefone</Text><Text style={styles.adminClaimDataValue}>{claim.claimantPhone}</Text></View>
+              <View style={styles.adminClaimData}><Text style={styles.adminClaimDataLabel}>CNPJ</Text><Text style={styles.adminClaimDataValue}>{formatCnpj(claim.claimantCnpj)}</Text></View>
+              <View style={styles.adminClaimData}><Text style={styles.adminClaimDataLabel}>E-mail da conta</Text><Text style={styles.adminClaimDataValue}>{claim.claimantEmail || 'Não informado'}</Text></View>
+            </View>
+            {claim.notes ? <Text style={styles.adminClaimNotes}>{claim.notes}</Text> : null}
+            <View style={styles.ownerActions}>
+              <AppButton onPress={() => reviewExternalPlaceClaim(claim, 'approved')}>Aprovar solicitação</AppButton>
+              <AppButton kind="secondary" onPress={() => reviewExternalPlaceClaim(claim, 'rejected')}>Rejeitar</AppButton>
+            </View>
+          </View>
+        )) : (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>Nenhuma reivindicação pendente</Text>
+            <Text style={styles.emptyText}>Pedidos com responsável, telefone e CNPJ aparecerão aqui.</Text>
+          </View>
+        )}
         <SectionTitle title="Fila de aprovação" />
         <View style={styles.ownerButtonsRow}>
           <AppButton onPress={() => startRestaurantRegistration({ status: 'published', adminManaged: true })}>Cadastrar para empresa</AppButton>
@@ -7139,6 +7479,12 @@ function postKey(restaurantId, postId) {
     const openingHoursDraft = form.openingHoursDraft || {};
     const completedDays = Object.values(openingHoursDraft).filter(Boolean).length;
     const draftStatus = registerDraftSavedAt ? 'Rascunho salvo automaticamente' : 'Suas alterações serão salvas neste aparelho';
+    const registrationNameNeedle = normalize(form.name);
+    const externalRegistrationMatches = registrationNameNeedle.length >= 3
+      ? externalPlaces
+        .filter((place) => normalize(place.name).includes(registrationNameNeedle))
+        .slice(0, 4)
+      : [];
 
     return (
       <View style={styles.registerPage}>
@@ -7205,6 +7551,29 @@ function postKey(restaurantId, postId) {
                 <Text style={styles.registerSectionTitle}>Identidade</Text>
               </View>
               <Field label="Nome do estabelecimento" value={form.name || ''} error={registerErrors.name} onChangeText={(value) => setRestaurantFormField('name', value)} placeholder="Ex.: Casa Nostra" />
+              {externalRegistrationMatches.length ? (
+                <View style={styles.registerExternalMatches}>
+                  <Text style={styles.registerExternalMatchesTitle}>Seu restaurante já aparece no mapa?</Text>
+                  {externalRegistrationMatches.map((place) => (
+                    <Pressable
+                      key={place.id}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Solicitar acesso ao local ${place.name}`}
+                      onPress={() => beginExternalPlaceClaim(place)}
+                      style={styles.registerExternalMatch}
+                    >
+                      <View style={styles.registerExternalMatchIcon}>
+                        <MaterialCommunityIcons name="silverware-fork-knife" size={16} color="#FFFFFF" />
+                      </View>
+                      <View style={styles.registerExternalMatchCopy}>
+                        <Text style={styles.registerExternalMatchName}>{place.name}</Text>
+                        <Text numberOfLines={1} style={styles.registerExternalMatchAddress}>{place.address || `${place.city}, ${place.state}`}</Text>
+                      </View>
+                      <Text style={styles.registerExternalMatchAction}>Solicitar acesso</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
               <Text style={styles.registerFieldLabel}>Categoria principal</Text>
               <View style={styles.registerChoiceWrap}>
                 {restaurantCategoryOptions.map((category) => (
@@ -7677,6 +8046,25 @@ function postKey(restaurantId, postId) {
         favorite={selectedRestaurant && favorites.includes(selectedRestaurant.name)}
         onFavorite={toggleFavorite}
         onReportContent={reportContent}
+      />
+      <ExternalPlaceModal
+        item={selectedExternalPlace}
+        onClose={() => setSelectedExternalPlace(null)}
+        onMaps={openMaps}
+        onClaim={beginExternalPlaceClaim}
+      />
+      <ExternalClaimModal
+        item={externalClaimPlace}
+        draft={externalClaimDraft}
+        setDraft={setExternalClaimDraft}
+        errors={externalClaimErrors}
+        submitting={externalClaimSubmitting}
+        onSubmit={submitExternalPlaceClaim}
+        onClose={() => {
+          if (externalClaimSubmitting) return;
+          setExternalClaimPlace(null);
+          setExternalClaimErrors({});
+        }}
       />
       <ReservationModal
         item={reservationRestaurant}
@@ -8537,6 +8925,89 @@ function ReservationModal({ item, currentUser, reservations = [], onClose, onRes
           </View>
         </View>
       </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function ExternalClaimModal({ item, draft, setDraft, errors = {}, submitting, onSubmit, onClose }) {
+  if (!item) return null;
+  const update = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalBackdrop}>
+        <View style={styles.externalClaimSheet}>
+          <View style={styles.externalClaimTop}>
+            <View style={styles.externalClaimTopCopy}>
+              <Text style={styles.externalClaimEyebrow}>Reivindicar restaurante</Text>
+              <Text style={styles.externalClaimTitle}>{item.name}</Text>
+              <Text numberOfLines={2} style={styles.externalClaimAddress}>{item.address || `${item.city || ''}, ${item.state || ''}`}</Text>
+            </View>
+            <Pressable accessibilityRole="button" accessibilityLabel="Fechar solicitação" onPress={onClose} style={styles.externalPlaceClose}>
+              <Ionicons name="close" size={24} color={colors.ink} />
+            </Pressable>
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.externalClaimFields}>
+            <View style={styles.externalClaimNotice}>
+              <Ionicons name="shield-checkmark-outline" size={22} color={colors.redDark} />
+              <Text style={styles.externalClaimNoticeText}>O acesso só será liberado após a análise dos dados pela Central Admin.</Text>
+            </View>
+            <Field label="Nome completo do responsável" value={draft.claimantName || ''} error={errors.claimantName} onChangeText={(value) => update('claimantName', value)} placeholder="Nome e sobrenome" />
+            <Field label="Telefone com DDD" value={draft.claimantPhone || ''} error={errors.claimantPhone} onChangeText={(value) => update('claimantPhone', value)} placeholder="(17) 99999-9999" keyboardType="phone-pad" />
+            <Field label="CNPJ da empresa" value={draft.claimantCnpj || ''} error={errors.claimantCnpj} onChangeText={(value) => update('claimantCnpj', formatCnpj(value))} placeholder="00.000.000/0000-00" keyboardType="number-pad" />
+            <Field label="Nome do restaurante" value={draft.restaurantName || ''} error={errors.restaurantName} onChangeText={(value) => update('restaurantName', value)} placeholder="Nome comercial" />
+            <Field label="Observações para análise" value={draft.notes || ''} onChangeText={(value) => update('notes', value)} placeholder="Seu cargo ou outra informação que ajude na validação" multiline />
+          </ScrollView>
+          <View style={styles.externalClaimFooter}>
+            <AppButton disabled={submitting} onPress={onSubmit}>{submitting ? 'Enviando...' : 'Enviar solicitação'}</AppButton>
+            <Text style={styles.externalClaimPrivacy}>CNPJ e telefone serão visíveis apenas para a equipe administrativa durante a análise.</Text>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function ExternalPlaceModal({ item, onClose, onMaps, onClaim }) {
+  if (!item) return null;
+  const location = [item.address, item.city, item.state].filter(Boolean).join(', ');
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.detailBackdrop}>
+        <View style={styles.externalPlaceSheet}>
+          <View style={styles.externalPlaceHeader}>
+            <View style={styles.externalPlaceIcon}>
+              <MaterialCommunityIcons name="silverware-fork-knife" size={30} color="#FFFFFF" />
+            </View>
+            <Pressable accessibilityRole="button" accessibilityLabel="Fechar local" onPress={onClose} style={styles.externalPlaceClose}>
+              <Ionicons name="close" size={24} color={colors.ink} />
+            </Pressable>
+          </View>
+          <View style={styles.externalPlaceBadge}>
+            <Ionicons name="information-circle-outline" size={16} color="#625E59" />
+            <Text style={styles.externalPlaceBadgeText}>Ainda não parceiro do Dine</Text>
+          </View>
+          <Text style={styles.externalPlaceTitle}>{item.name}</Text>
+          <Text style={styles.externalPlaceType}>{item.type || 'Restaurante'}</Text>
+          <View style={styles.externalPlaceAddressCard}>
+            <Ionicons name="location-outline" size={21} color={colors.redDark} />
+            <Text style={styles.externalPlaceAddress}>{location || 'Localização disponível no mapa'}</Text>
+          </View>
+          <Text style={styles.externalPlaceNotice}>
+            Este local aparece apenas para ajudar você a encontrá-lo. Ele ainda não possui perfil, avaliações, cardápio ou reservas no Dine.
+          </Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Como chegar" onPress={() => onMaps(item)} style={styles.externalPlacePrimary}>
+            <Ionicons name="navigate" size={20} color="#FFFFFF" />
+            <Text style={styles.externalPlacePrimaryText}>Como chegar</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel="Este restaurante é seu?" onPress={() => onClaim(item)} style={styles.externalPlaceClaim}>
+            <Ionicons name="storefront-outline" size={20} color={colors.redDark} />
+            <Text style={styles.externalPlaceClaimText}>Este restaurante é seu?</Text>
+          </Pressable>
+          <Text style={styles.externalPlaceAttribution}>
+            Dados de localização: Overture Maps. Informações podem precisar de atualização.
+          </Text>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -10711,17 +11182,17 @@ const styles = StyleSheet.create({
   discoveryFilterButton: { width: 38, height: 38, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
   discoveryCategoryRow: { gap: 12, paddingTop: 18, paddingBottom: 6, paddingRight: 20 },
   discoveryCategory: { width: 66, alignItems: 'center', gap: 7 },
-  discoveryCategoryImage: { width: 60, height: 60, borderRadius: 8, backgroundColor: colors.surface },
+  discoveryCategoryImage: { width: 60, height: 60, borderRadius: 16, overflow: 'hidden', backgroundColor: colors.surface },
   discoveryCategoryLabel: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 11, textAlign: 'center' },
   discoveryCampaignEntrance: { position: 'relative', paddingBottom: 19 },
   discoveryCampaignPager: { width: '100%', borderRadius: 16, overflow: 'hidden' },
   discoveryCampaignCard: { height: 246, borderRadius: 16, overflow: 'hidden', backgroundColor: colors.redDark, shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 5 },
   discoveryCampaignImage: { width: '100%', height: '100%' },
-  discoveryCampaignScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,7,3,0.08)' },
+  discoveryCampaignFade: { position: 'absolute', left: 0, top: 0, bottom: 0, width: '80%' },
   discoveryCampaignSheen: { position: 'absolute', top: -40, bottom: -40, width: 58, backgroundColor: 'rgba(255,255,255,0.13)', transform: [{ rotate: '12deg' }] },
-  discoveryCampaignCopy: { position: 'absolute', left: 12, top: 12, bottom: 12, width: '51%', justifyContent: 'center', alignItems: 'flex-start', gap: 5, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, backgroundColor: 'rgba(25,14,10,0.66)' },
+  discoveryCampaignCopy: { position: 'absolute', left: 18, top: 18, bottom: 18, width: '47%', justifyContent: 'center', alignItems: 'flex-start', gap: 5 },
   discoveryCampaignEyebrow: { color: '#FFD7C8', fontFamily: 'Nunito_800ExtraBold', fontSize: 9, letterSpacing: 1.1 },
-  discoveryCampaignTitle: { color: '#FFFFFF', fontFamily: titleFont, fontSize: 20, lineHeight: 22 },
+  discoveryCampaignTitle: { color: '#FFFFFF', fontFamily: titleFont, fontSize: 22, lineHeight: 24, textShadowColor: 'rgba(0,0,0,0.22)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 },
   discoveryCampaignText: { color: 'rgba(255,255,255,0.88)', fontFamily: 'Nunito_700Bold', fontSize: 11, lineHeight: 15 },
   discoveryCampaignCta: { minHeight: 30, marginTop: 4, paddingHorizontal: 11, borderRadius: 15, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFFFFF' },
   discoveryCampaignCtaText: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 10 },
@@ -10802,17 +11273,26 @@ const styles = StyleSheet.create({
   webMapMarker: { position: 'absolute', zIndex: 5, width: 50, height: 62, marginLeft: -25, marginTop: -58, alignItems: 'center', justifyContent: 'flex-start' },
   webMapMarkerDot: { width: 42, height: 42, borderRadius: 21, overflow: 'hidden', backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: colors.redDark, shadowColor: colors.ink, shadowOpacity: 0.2, shadowRadius: 8, elevation: 5 },
   webMapMarkerDotSelected: { width: 48, height: 48, borderRadius: 24, borderWidth: 4, borderColor: colors.redDark, shadowOpacity: 0.3 },
+  webExternalMapMarker: { zIndex: 4 },
+  webExternalMapMarkerDot: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: '#FFFFFF', backgroundColor: '#77736E' },
+  webExternalMapMarkerDotSelected: { width: 40, height: 40, borderRadius: 20, borderColor: '#FFFFFF', backgroundColor: '#514E4A' },
   webMapMarkerPhoto: { width: '100%', height: '100%' },
   webMapMarkerTip: { marginTop: -2, width: 0, height: 0, borderLeftWidth: 7, borderRightWidth: 7, borderTopWidth: 12, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: colors.redDark },
   webMapMarkerTipSelected: { borderLeftWidth: 8, borderRightWidth: 8, borderTopWidth: 14 },
+  webExternalMapMarkerTip: { borderTopColor: '#77736E' },
   nativeMapMarker: { width: 48, height: 59, alignItems: 'center' },
   nativeMapMarkerSelected: { width: 54, height: 65 },
   nativeMapMarkerPhotoWrap: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', backgroundColor: colors.card, borderWidth: 3, borderColor: colors.redDark, shadowColor: colors.ink, shadowOpacity: 0.2, shadowRadius: 7, elevation: 5 },
   nativeMapMarkerPhoto: { width: '100%', height: '100%' },
   nativeMapMarkerTip: { marginTop: -2, width: 0, height: 0, borderLeftWidth: 7, borderRightWidth: 7, borderTopWidth: 12, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: colors.redDark },
+  nativeExternalMarker: { width: 40, height: 50, alignItems: 'center' },
+  nativeExternalMarkerSelected: { transform: [{ scale: 1.12 }] },
+  nativeExternalMarkerDot: { width: 34, height: 34, borderRadius: 17, borderWidth: 2, borderColor: '#FFFFFF', backgroundColor: '#77736E', alignItems: 'center', justifyContent: 'center', elevation: 4 },
+  nativeExternalMarkerTip: { marginTop: -2, width: 0, height: 0, borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 10, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#77736E' },
   selectedMapCard: { position: 'absolute', left: 12, right: 12, bottom: 12, zIndex: 9, minHeight: 146, borderRadius: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.line, padding: 9, shadowColor: colors.ink, shadowOpacity: 0.18, shadowRadius: 16, elevation: 8 },
   selectedMapMain: { flexDirection: 'row', alignItems: 'stretch', gap: 11 },
   selectedMapImage: { width: 94, minHeight: 82, borderRadius: 7, backgroundColor: colors.surface },
+  selectedExternalMapImage: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEECE9' },
   selectedMapCopy: { flex: 1, minWidth: 0, paddingTop: 2, gap: 2 },
   selectedMapTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   selectedMapName: { flex: 1, minWidth: 0, color: colors.ink, fontFamily: titleFont, fontSize: 18, lineHeight: 22 },
@@ -10823,8 +11303,11 @@ const styles = StyleSheet.create({
   selectedMapDivider: { color: '#A9A4A0', fontFamily: bodyFont, fontSize: 10 },
   selectedMapStatus: { color: colors.muted, fontFamily: bodyFont, fontSize: 11 },
   selectedMapStatusOpen: { color: colors.green },
-  selectedMapRoute: { minHeight: 40, marginLeft: 105, marginTop: 8, borderRadius: 7, backgroundColor: colors.redDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  selectedMapActionRow: { marginLeft: 105, marginTop: 8, flexDirection: 'row', gap: 8 },
+  selectedMapRoute: { flex: 1, minHeight: 40, borderRadius: 7, backgroundColor: colors.redDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   selectedMapRouteText: { color: '#FFFFFF', fontFamily: bodyFont, fontSize: 13 },
+  selectedMapClaim: { minWidth: 78, minHeight: 40, borderRadius: 7, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  selectedMapClaimText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 13 },
   mapLocateFloat: { position: 'absolute', right: 14, bottom: 174, zIndex: 8, width: 46, height: 46, borderRadius: 23, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.line, alignItems: 'center', justifyContent: 'center', shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 10, elevation: 7 },
   mapPage: { paddingTop: 10 },
   mapSearchHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 2 },
@@ -10844,8 +11327,53 @@ const styles = StyleSheet.create({
   pageInput: { flex: 1, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 14 },
   searchFilterButton: { width: 38, height: 38, borderRadius: 7, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card },
   mapSheet: { marginHorizontal: -18, marginTop: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0, backgroundColor: colors.bg, paddingHorizontal: 18, paddingTop: 14, paddingBottom: 24 },
+  mapLegend: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 14, marginTop: -5, marginBottom: 12 },
+  mapLegendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  mapLegendPartnerDot: { width: 11, height: 11, borderRadius: 6, backgroundColor: colors.redDark },
+  mapLegendExternalDot: { width: 11, height: 11, borderRadius: 6, backgroundColor: '#77736E' },
+  mapLegendText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11 },
   sheetHandle: { display: 'none' },
   detailBackdrop: { flex: 1, backgroundColor: 'rgba(20,20,20,0.52)' },
+  externalPlaceSheet: { width: '100%', maxWidth: 560, marginTop: 'auto', alignSelf: 'center', borderTopLeftRadius: 28, borderTopRightRadius: 28, backgroundColor: colors.bg, paddingHorizontal: 22, paddingTop: 20, paddingBottom: Platform.OS === 'ios' ? 34 : 24 },
+  externalPlaceHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
+  externalPlaceIcon: { width: 58, height: 58, borderRadius: 20, backgroundColor: '#77736E', alignItems: 'center', justifyContent: 'center' },
+  externalPlaceClose: { width: 42, height: 42, borderRadius: 21, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' },
+  externalPlaceBadge: { alignSelf: 'flex-start', minHeight: 30, borderRadius: 15, backgroundColor: '#EEECE9', paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 10 },
+  externalPlaceBadgeText: { color: '#625E59', fontFamily: bodyFont, fontSize: 11 },
+  externalPlaceTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 27, lineHeight: 32 },
+  externalPlaceType: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 14, marginTop: 2, marginBottom: 16 },
+  externalPlaceAddressCard: { minHeight: 58, borderRadius: 12, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 14, paddingVertical: 11, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  externalPlaceAddress: { flex: 1, minWidth: 0, color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 13, lineHeight: 18 },
+  externalPlaceNotice: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 18, marginVertical: 16 },
+  externalPlacePrimary: { minHeight: 50, borderRadius: 10, backgroundColor: colors.redDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  externalPlacePrimaryText: { color: '#FFFFFF', fontFamily: bodyFont, fontSize: 14 },
+  externalPlaceClaim: { minHeight: 50, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(241,61,11,0.28)', backgroundColor: '#FFF7F1', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 10 },
+  externalPlaceClaimText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 14 },
+  externalPlaceAttribution: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 15, textAlign: 'center', marginTop: 14 },
+  externalClaimSheet: { width: '100%', maxWidth: 580, maxHeight: '94%', marginTop: 'auto', alignSelf: 'center', borderTopLeftRadius: 28, borderTopRightRadius: 28, backgroundColor: colors.bg, overflow: 'hidden' },
+  externalClaimTop: { paddingHorizontal: 22, paddingTop: 22, paddingBottom: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 12, borderBottomWidth: 1, borderBottomColor: colors.line },
+  externalClaimTopCopy: { flex: 1, minWidth: 0 },
+  externalClaimEyebrow: { color: colors.redDark, fontFamily: bodyFont, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 },
+  externalClaimTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 24, lineHeight: 29, marginTop: 2 },
+  externalClaimAddress: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, marginTop: 3 },
+  externalClaimFields: { paddingHorizontal: 22, paddingVertical: 16, gap: 13 },
+  externalClaimNotice: { minHeight: 58, borderRadius: 11, backgroundColor: '#FFF3EC', borderWidth: 1, borderColor: 'rgba(241,61,11,0.18)', padding: 11, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  externalClaimNoticeText: { flex: 1, minWidth: 0, color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 12, lineHeight: 17 },
+  externalClaimFooter: { paddingHorizontal: 22, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 30 : 20, borderTopWidth: 1, borderTopColor: colors.line, backgroundColor: colors.card },
+  externalClaimPrivacy: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 14, textAlign: 'center', marginTop: 8 },
+  adminClaimCard: { borderRadius: 12, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 14, marginBottom: 12, gap: 13 },
+  adminClaimHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  adminClaimIcon: { width: 42, height: 42, borderRadius: 12, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  adminClaimHeaderCopy: { flex: 1, minWidth: 0 },
+  adminClaimRestaurant: { color: colors.ink, fontFamily: titleFont, fontSize: 17 },
+  adminClaimAddress: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11, lineHeight: 15, marginTop: 1 },
+  adminClaimStatus: { minHeight: 26, borderRadius: 13, paddingHorizontal: 9, backgroundColor: '#FFF0E8', alignItems: 'center', justifyContent: 'center' },
+  adminClaimStatusText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 10 },
+  adminClaimDataGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  adminClaimData: { width: '48%', minWidth: 140, flexGrow: 1, borderRadius: 8, backgroundColor: '#F7F5F2', padding: 9 },
+  adminClaimDataLabel: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.4 },
+  adminClaimDataValue: { color: colors.ink, fontFamily: bodyFont, fontSize: 12, marginTop: 2 },
+  adminClaimNotes: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, borderLeftWidth: 3, borderLeftColor: colors.ochre, paddingLeft: 9 },
   detailSheet: { flex: 1, width: '100%', maxWidth: 640, alignSelf: 'center', backgroundColor: colors.bg },
   detailBanner: { width: '100%', aspectRatio: 1.25, backgroundColor: colors.surface },
   detailTopActions: { position: 'absolute', top: Platform.OS === 'ios' ? 48 : 20, left: 14, right: 14, zIndex: 4, flexDirection: 'row', justifyContent: 'space-between' },
@@ -11050,6 +11578,19 @@ const styles = StyleSheet.create({
   registerSectionHeaderBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   registerSectionTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 17, lineHeight: 21 },
   registerFieldLabel: { color: colors.muted, fontFamily: bodyFont, fontSize: 11, marginBottom: -4 },
+  registerExternalMatches: { borderRadius: 10, borderWidth: 1, borderColor: 'rgba(119,115,110,0.22)', backgroundColor: '#F7F5F2', padding: 10, gap: 7 },
+  registerExternalMatchesTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  registerExternalMatch: { minHeight: 54, borderRadius: 8, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 9, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  registerExternalMatchIcon: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#77736E', alignItems: 'center', justifyContent: 'center' },
+  registerExternalMatchCopy: { flex: 1, minWidth: 0 },
+  registerExternalMatchName: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  registerExternalMatchAddress: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, marginTop: 1 },
+  registerExternalMatchAction: { color: colors.redDark, fontFamily: bodyFont, fontSize: 10 },
+  registerExternalSelected: { minHeight: 62, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(241,61,11,0.24)', backgroundColor: '#FFF7F1', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  registerExternalSelectedIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  registerExternalSelectedCopy: { flex: 1, minWidth: 0 },
+  registerExternalSelectedTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  registerExternalSelectedText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 14, marginTop: 1 },
   registerChoiceWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   registerChoiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   registerChoice: { minHeight: 36, borderRadius: 7, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, paddingHorizontal: 11, alignItems: 'center', justifyContent: 'center' },

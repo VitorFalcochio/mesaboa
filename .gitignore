@@ -4,9 +4,12 @@ node_modules/
 .env
 .env.local
 dist/
+dist-*/
 build/
 test-results/
 playwright-report/
+.tmp-overture/
+__pycache__/
 .expo-export-smoke/
 .expo-export-ios-smoke/
 *.log
