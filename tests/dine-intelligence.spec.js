@@ -21,10 +21,12 @@ test('understands natural-language discovery on Explore and Map', async ({ page 
   await exploreSearch.fill('lugar romântico para jantar');
   await expect(page.getByText('Dine entendeu', { exact: true })).toBeVisible();
   await expect(page.getByText('Clima romântico', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Mascote Dine usando busca inteligente')).toBeVisible();
 
   await page.getByRole('tab', { name: 'Ir para Mapa' }).click();
   await expect(page.getByPlaceholder('Descreva o lugar que você procura...')).toHaveValue('lugar romântico para jantar');
   await expect(page.getByText('Dine entendeu', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Mascote Dine indicando local no mapa')).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
@@ -43,11 +45,13 @@ test('creates a collaborative Dine Match, votes and finishes with a winner', asy
   await expect(page.getByText('Votação ao vivo', { exact: true })).toBeVisible();
   await expect(page.getByText('CÓDIGO', { exact: true })).toBeVisible();
   await expect(page.getByText('Liderando', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Mascote Dine acompanhando a votação')).toBeVisible();
 
   await page.getByRole('button', { name: /^Votar em / }).first().click();
   await expect(page.getByText('+1 pontos', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Encerrar votação do Dine Match' }).click();
   await expect(page.getByText('Match encerrado', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Mascote Dine comemorando o vencedor')).toBeVisible();
   const reserveWinner = page.getByRole('button', { name: /^Reservar vencedor / });
   await expect(reserveWinner).toBeVisible();
   await reserveWinner.click();
