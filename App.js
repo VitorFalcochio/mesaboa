@@ -981,9 +981,8 @@ const webMapTileSize = 256;
 
 function webMapZoom(region) {
   const delta = Math.max(Number(region?.latitudeDelta || rioPretoRegion.latitudeDelta), Number(region?.longitudeDelta || rioPretoRegion.longitudeDelta));
-  if (delta <= 0.025) return 15;
-  if (delta <= 0.04) return 14;
-  return 13;
+  const zoom = Math.round(Math.log2(360 / Math.max(0.0001, delta))) + 1;
+  return Math.min(18, Math.max(3, zoom));
 }
 
 function longitudeToTileX(longitude, zoom) {
@@ -1417,6 +1416,7 @@ function PartnerMap({
 }) {
   const { width } = useWindowDimensions();
   const dragStartRef = useRef(null);
+  const pinchStartRef = useRef(null);
   const [webPanOffset, setWebPanOffset] = useState({ x: 0, y: 0 });
   const [selectedMapItem, setSelectedMapItem] = useState(null);
   const webMapWidth = Math.max(320, width);
@@ -1466,8 +1466,63 @@ function PartnerMap({
     };
   }
 
+  function webMapEventTouches(event) {
+    const touches = event?.nativeEvent?.touches;
+    if (!touches) return [];
+    return Array.from(touches).map((touch) => ({
+      x: Number(touch.pageX ?? touch.clientX ?? 0),
+      y: Number(touch.pageY ?? touch.clientY ?? 0)
+    }));
+  }
+
+  function webMapTouchDistance(touches) {
+    if (touches.length < 2) return 0;
+    return Math.hypot(touches[1].x - touches[0].x, touches[1].y - touches[0].y);
+  }
+
+  function zoomWebMap(scale, sourceRegion = webMapRegion) {
+    const safeScale = Math.max(0.2, Number(scale) || 1);
+    onRegionChange?.({
+      ...sourceRegion,
+      latitudeDelta: Math.min(0.5, Math.max(0.004, Number(sourceRegion.latitudeDelta) / safeScale)),
+      longitudeDelta: Math.min(0.5, Math.max(0.004, Number(sourceRegion.longitudeDelta) / safeScale))
+    });
+  }
+
+  function beginWebMapPinch(event) {
+    const touches = webMapEventTouches(event);
+    if (touches.length < 2) return false;
+    event?.preventDefault?.();
+    onInteractionChange?.(true);
+    pinchStartRef.current = {
+      distance: webMapTouchDistance(touches),
+      region: { ...webMapRegion }
+    };
+    dragStartRef.current = null;
+    setWebPanOffset({ x: 0, y: 0 });
+    return true;
+  }
+
+  function moveWebMapPinch(event) {
+    const touches = webMapEventTouches(event);
+    if (touches.length < 2) return false;
+    event?.preventDefault?.();
+    const distance = webMapTouchDistance(touches);
+    if (!pinchStartRef.current) return beginWebMapPinch(event);
+    if (pinchStartRef.current.distance > 0) {
+      zoomWebMap(distance / pinchStartRef.current.distance, pinchStartRef.current.region);
+    }
+    return true;
+  }
+
   function finishWebMapPan() {
     onInteractionChange?.(false);
+    if (pinchStartRef.current) {
+      pinchStartRef.current = null;
+      dragStartRef.current = null;
+      setWebPanOffset({ x: 0, y: 0 });
+      return;
+    }
     if (!dragStartRef.current || (!webPanOffset.x && !webPanOffset.y)) {
       dragStartRef.current = null;
       return;
@@ -1586,6 +1641,9 @@ function PartnerMap({
           style={styles.realMap}
           region={region}
           onRegionChangeComplete={onRegionChange}
+          zoomEnabled
+          zoomTapEnabled
+          scrollEnabled
           showsUserLocation={locationGranted}
           showsMyLocationButton={false}
           showsCompass
@@ -1648,17 +1706,30 @@ function PartnerMap({
     return (
       <View style={styles.mapCard}>
         <View
+          testID="partner-map-gesture-layer"
+          accessibilityLabel="Mapa interativo"
           style={styles.webMapDragLayer}
           onStartShouldSetResponder={() => true}
           onMoveShouldSetResponder={() => true}
           onStartShouldSetResponderCapture={() => true}
           onMoveShouldSetResponderCapture={() => true}
+          onTouchStart={beginWebMapPinch}
+          onTouchMove={moveWebMapPinch}
+          onTouchEnd={() => {
+            if (pinchStartRef.current) finishWebMapPan();
+          }}
+          onTouchCancel={() => {
+            if (pinchStartRef.current) finishWebMapPan();
+          }}
           onResponderGrant={(event) => {
             onInteractionChange?.(true);
+            if (beginWebMapPinch(event)) return;
             const point = webMapEventPoint(event);
             dragStartRef.current = { ...point, startOffset: webPanOffset };
           }}
           onResponderMove={(event) => {
+            if (moveWebMapPinch(event)) return;
+            if (pinchStartRef.current) return;
             if (!dragStartRef.current) return;
             const point = webMapEventPoint(event);
             setWebPanOffset({
@@ -1668,6 +1739,12 @@ function PartnerMap({
           }}
           onResponderRelease={finishWebMapPan}
           onResponderTerminate={finishWebMapPan}
+          onResponderTerminationRequest={() => false}
+          onWheel={(event) => {
+            event?.preventDefault?.();
+            const deltaY = Number(event?.nativeEvent?.deltaY ?? event?.deltaY ?? 0);
+            zoomWebMap(deltaY < 0 ? 1.35 : 0.74);
+          }}
         >
           {webTiles.map((tile) => React.createElement('img', {
             key: tile.key,
