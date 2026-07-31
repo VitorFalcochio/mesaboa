@@ -1281,11 +1281,84 @@ function matchesQuickFilter(item, filter) {
   return normalize(`${item.name} ${item.type} ${item.district}`).includes(normalize(filter));
 }
 
-function matchesRestaurantQuery(item, query) {
-  const needle = normalize(query);
-  if (!needle) return true;
-  if (needle.includes('aberto agora') && !getRestaurantOpenStatus(item).open) return false;
-  if ((needle.includes('ate 80') || needle.includes('economico') || needle.includes('barato')) && !['$', '$$'].includes(item.price)) return false;
+const intelligentSearchGroups = [
+  {
+    id: 'romantic',
+    label: 'Clima romântico',
+    icon: 'heart-outline',
+    terms: ['romantico', 'encontro', 'casal', 'date', 'aniversario de namoro'],
+    signals: ['romantico', 'vinho', 'italiana', 'bistro', 'jantar', 'aconchegante', 'ocasião especial', 'ocasiao especial']
+  },
+  {
+    id: 'family',
+    label: 'Bom para família',
+    icon: 'people-outline',
+    terms: ['crianca', 'criancas', 'familia', 'filhos', 'espaco kids'],
+    signals: ['familia', 'infantil', 'kids', 'espaco', 'parque', 'ambiente amplo', 'shopping']
+  },
+  {
+    id: 'work',
+    label: 'Bom para trabalhar',
+    icon: 'laptop-outline',
+    terms: ['trabalhar', 'reuniao', 'notebook', 'wifi', 'coworking'],
+    signals: ['cafe', 'cafeteria', 'wifi', 'padaria', 'coworking', 'tranquilo']
+  },
+  {
+    id: 'dessert',
+    label: 'Doces e sobremesas',
+    icon: 'ice-cream-outline',
+    terms: ['doce', 'doces', 'sobremesa', 'sorvete', 'acai'],
+    signals: ['doce', 'sobremesa', 'sorvete', 'acai', 'cafe', 'confeitaria']
+  },
+  {
+    id: 'liveMusic',
+    label: 'Música ao vivo',
+    icon: 'musical-notes-outline',
+    terms: ['musica ao vivo', 'show', 'banda', 'piano'],
+    signals: ['musica ao vivo', 'show', 'banda', 'piano', 'pub']
+  },
+  {
+    id: 'outdoor',
+    label: 'Ao ar livre',
+    icon: 'leaf-outline',
+    terms: ['ao ar livre', 'varanda', 'rooftop', 'area externa'],
+    signals: ['ao ar livre', 'varanda', 'rooftop', 'area externa', 'jardim']
+  }
+];
+
+const intelligentSearchStopWords = new Set([
+  'a', 'as', 'com', 'da', 'de', 'do', 'e', 'em', 'eu', 'lugar', 'lugares', 'me', 'mim', 'na', 'no', 'o', 'os',
+  'para', 'perto', 'por', 'pra', 'que', 'quero', 'restaurante', 'restaurantes', 'um', 'uma'
+]);
+
+function searchIntelligenceFor(query) {
+  const needle = normalize(query).trim();
+  if (!needle) return { needle: '', groups: [], labels: [], openNow: false, affordable: false, premium: false, reservation: false, nearby: false };
+  const groups = intelligentSearchGroups.filter((group) => group.terms.some((term) => needle.includes(term)));
+  const openNow = ['aberto agora', 'aberto', 'funcionando agora'].some((term) => needle.includes(term));
+  const affordable = ['barato', 'economico', 'em conta', 'ate 80', 'até 80'].some((term) => needle.includes(normalize(term)));
+  const premium = ['sofisticado', 'premium', 'alta gastronomia', 'especial'].some((term) => needle.includes(term));
+  const reservation = ['reserva', 'reservar', 'mesa'].some((term) => needle.includes(term));
+  const nearby = ['perto', 'proximo', 'próximo', 'aqui perto'].some((term) => needle.includes(normalize(term)));
+  const labels = [
+    ...groups.map((group) => ({ id: group.id, label: group.label, icon: group.icon })),
+    ...(openNow ? [{ id: 'open', label: 'Aberto agora', icon: 'time-outline' }] : []),
+    ...(affordable ? [{ id: 'affordable', label: 'Preço acessível', icon: 'cash-outline' }] : []),
+    ...(premium ? [{ id: 'premium', label: 'Experiência especial', icon: 'sparkles-outline' }] : []),
+    ...(reservation ? [{ id: 'reservation', label: 'Aceita reserva', icon: 'calendar-outline' }] : []),
+    ...(nearby ? [{ id: 'nearby', label: 'Mais perto', icon: 'navigate-outline' }] : [])
+  ];
+  return { needle, groups, labels, openNow, affordable, premium, reservation, nearby };
+}
+
+function restaurantSearchMatch(item, query) {
+  const intelligence = searchIntelligenceFor(query);
+  if (!intelligence.needle) return { matches: true, score: 0, reasons: [] };
+  if (intelligence.openNow && !getRestaurantOpenStatus(item).open) return { matches: false, score: 0, reasons: [] };
+  if (intelligence.affordable && !['$', '$$'].includes(item.price)) return { matches: false, score: 0, reasons: [] };
+  if (intelligence.premium && !['$$$', '$$$$'].includes(item.price)) return { matches: false, score: 0, reasons: [] };
+  if (intelligence.reservation && !item.phone && !item.reservationSettings) return { matches: false, score: 0, reasons: [] };
+
   const searchable = normalize([
     item.name,
     item.type,
@@ -1296,18 +1369,33 @@ function matchesRestaurantQuery(item, query) {
     ...(item.highlights || []),
     ...(item.menuItems || []).map((dish) => `${dish.name || ''} ${dish.category || ''} ${dish.description || ''}`)
   ].join(' '));
-  const intentions = [
-    { terms: ['romantico', 'encontro', 'casal'], matches: ['romantico', 'vinho', 'italiana', 'bistro', 'jantar', 'aconchegante'] },
-    { terms: ['crianca', 'criancas', 'familia'], matches: ['familia', 'infantil', 'kids', 'espaco', 'parque'] },
-    { terms: ['trabalhar', 'reuniao', 'notebook'], matches: ['cafe', 'cafeteria', 'wifi', 'padaria', 'coworking'] },
-    { terms: ['barato', 'economico', 'ate 80'], matches: ['lanche', 'padaria', 'self service', 'comida brasileira'] },
-    { terms: ['doce', 'sobremesa'], matches: ['doce', 'sorvete', 'acai', 'cafe', 'confeitaria'] }
+  const matchedGroups = intelligence.groups.filter((group) => group.signals.some((signal) => searchable.includes(normalize(signal))));
+  if (intelligence.groups.length && matchedGroups.length !== intelligence.groups.length) return { matches: false, score: 0, reasons: [] };
+
+  const knownTerms = intelligentSearchGroups.flatMap((group) => [...group.terms, ...group.signals]);
+  const ignoredTokens = new Set([
+    ...intelligentSearchStopWords,
+    'aberto', 'agora', 'funcionando', 'barato', 'economico', 'conta', 'ate', '80', 'sofisticado', 'premium',
+    'alta', 'gastronomia', 'especial', 'reserva', 'reservar', 'mesa', 'proximo', 'aqui',
+    ...knownTerms.flatMap((term) => normalize(term).split(' '))
+  ]);
+  const directWords = intelligence.needle.split(/\s+/).filter((word) => word.length > 2 && !ignoredTokens.has(word));
+  const directMatches = directWords.filter((word) => searchable.includes(word));
+  if (!intelligence.groups.length && directWords.length && !directMatches.length) return { matches: false, score: 0, reasons: [] };
+
+  const reasons = [
+    ...matchedGroups.map((group) => group.label),
+    ...(intelligence.openNow ? ['Aberto agora'] : []),
+    ...(intelligence.affordable ? ['Preço acessível'] : []),
+    ...(intelligence.premium ? ['Experiência especial'] : []),
+    ...(intelligence.reservation ? ['Aceita reserva'] : []),
+    ...directMatches.slice(0, 2).map((word) => word.charAt(0).toUpperCase() + word.slice(1))
   ];
-  const intent = intentions.find((group) => group.terms.some((term) => needle.includes(term)));
-  const meaningfulWords = needle.split(' ').filter((word) => word.length > 2 && !['perto', 'mim', 'lugar', 'comida', 'restaurante', 'aberto', 'agora'].includes(word));
-  if (intent && intent.matches.some((term) => searchable.includes(term))) return true;
-  if (!meaningfulWords.length) return true;
-  return meaningfulWords.every((word) => searchable.includes(word));
+  return { matches: true, score: matchedGroups.length * 30 + directMatches.length * 12 + reasons.length * 5, reasons };
+}
+
+function matchesRestaurantQuery(item, query) {
+  return restaurantSearchMatch(item, query).matches;
 }
 
 function PartnerMap({
@@ -1801,6 +1889,14 @@ export default function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingIndex, setOnboardingIndex] = useState(0);
   const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [dineMatchDraft, setDineMatchDraft] = useState({
+    occasion: 'Encontro com amigos',
+    cuisines: [],
+    budget: '$$',
+    radius: 5,
+    participants: 2
+  });
+  const [dineMatchResults, setDineMatchResults] = useState([]);
 
   useEffect(() => {
     screenFade.setValue(0);
@@ -2259,25 +2355,30 @@ export default function App() {
     coordinate: restaurantCoordinates[item.id] || coordinateForRestaurant(item, index)
   })), [restaurants, restaurantCoordinates]);
   const publicRestaurants = useMemo(() => restaurantsWithCoordinates.filter((item) => !item.status || item.status === 'published'), [restaurantsWithCoordinates]);
+  const searchIntelligence = useMemo(() => searchIntelligenceFor(query), [query]);
 
   const nearbyRestaurants = useMemo(() => {
-    const needle = normalize(query);
     return publicRestaurants
       .map((item, index) => {
         const coordinate = item.coordinate || coordinateForRestaurant(item, index);
         const distanceFromUser = distanceKm(userLocation, coordinate);
         const distanceFromArea = distanceKm(searchCenter, coordinate);
+        const searchMatch = restaurantSearchMatch(item, query);
         return {
           ...item,
           coordinate,
           distanceKm: distanceFromUser ?? distanceFromArea,
-          distanceFromAreaKm: distanceFromArea
+          distanceFromAreaKm: distanceFromArea,
+          searchScore: searchMatch.score,
+          searchReasons: searchMatch.reasons,
+          searchMatches: searchMatch.matches
         };
       })
-      .filter((item) => !needle || matchesRestaurantQuery(item, query))
+      .filter((item) => item.searchMatches)
       .filter((item) => matchesQuickFilter(item, selectedCategory))
       .filter((item) => !Number.isFinite(item.distanceFromAreaKm) || item.distanceFromAreaKm <= radiusKm)
       .sort((a, b) => {
+        if (query.trim() && b.searchScore !== a.searchScore) return b.searchScore - a.searchScore;
         const distanceA = Number.isFinite(a.distanceKm) ? a.distanceKm : Number.POSITIVE_INFINITY;
         const distanceB = Number.isFinite(b.distanceKm) ? b.distanceKm : Number.POSITIVE_INFINITY;
         if (distanceA !== distanceB) return distanceA - distanceB;
@@ -2315,7 +2416,9 @@ export default function App() {
       })
       .filter((item) => {
         if (!needle) return true;
-        return normalize(`${item.name} ${item.type} ${item.category} ${item.address} ${item.city}`).includes(needle);
+        const searchable = normalize(`${item.name} ${item.type} ${item.category} ${item.basicCategory} ${item.address} ${item.city}`);
+        const words = needle.split(/\s+/).filter((word) => word.length > 2 && !intelligentSearchStopWords.has(word) && !['proximo', 'aqui'].includes(word));
+        return words.length ? words.some((word) => searchable.includes(word)) : true;
       })
       .filter((item) => {
         if (!categoryNeedle) return true;
@@ -4438,6 +4541,226 @@ function postKey(restaurantId, postId) {
   return `${restaurantId}:${postId}`;
 }
 
+  function renderIntelligentSearchAssist(context = 'explore') {
+    const suggestions = [
+      'Romântico e aberto agora',
+      'Café para trabalhar',
+      'Barato perto de mim'
+    ];
+    if (!query.trim()) {
+      if (context === 'map') return null;
+      return (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.smartSearchSuggestions}>
+          <View style={styles.smartSearchHint}>
+            <Ionicons name="sparkles" size={13} color={colors.redDark} />
+            <Text style={styles.smartSearchHintText}>Experimente</Text>
+          </View>
+          {suggestions.map((suggestion) => (
+            <Pressable key={suggestion} onPress={() => setQuery(suggestion)} style={styles.smartSearchSuggestion}>
+              <Text style={styles.smartSearchSuggestionText}>{suggestion}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      );
+    }
+    return (
+      <View style={[styles.smartSearchUnderstood, context === 'map' && styles.smartSearchUnderstoodMap]}>
+        <View style={styles.smartSearchUnderstoodTop}>
+          <View style={styles.smartSearchBadge}>
+            <Ionicons name="sparkles" size={12} color={colors.redDark} />
+            <Text style={styles.smartSearchBadgeText}>Dine entendeu</Text>
+          </View>
+          <Text style={styles.smartSearchCount}>{nearbyRestaurants.length} {nearbyRestaurants.length === 1 ? 'lugar' : 'lugares'}</Text>
+        </View>
+        {searchIntelligence.labels.length ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.smartSearchLabels}>
+            {searchIntelligence.labels.map((item) => (
+              <View key={item.id} style={styles.smartSearchLabel}>
+                <Ionicons name={item.icon} size={13} color={colors.ink} />
+                <Text style={styles.smartSearchLabelText}>{item.label}</Text>
+              </View>
+            ))}
+          </ScrollView>
+        ) : (
+          <Text style={styles.smartSearchFallback}>Buscando por nome, tipo de cozinha, prato e região.</Text>
+        )}
+      </View>
+    );
+  }
+
+  function toggleDineMatchCuisine(cuisine) {
+    setDineMatchResults([]);
+    setDineMatchDraft((current) => ({
+      ...current,
+      cuisines: current.cuisines.includes(cuisine)
+        ? current.cuisines.filter((item) => item !== cuisine)
+        : [...current.cuisines, cuisine]
+    }));
+  }
+
+  function updateDineMatchDraft(patch) {
+    setDineMatchResults([]);
+    setDineMatchDraft((current) => ({ ...current, ...patch }));
+  }
+
+  function generateDineMatch() {
+    const occasionQueries = {
+      'Encontro com amigos': 'ambiente para amigos',
+      'Date romântico': 'lugar romântico para casal',
+      'Família': 'lugar para família e crianças',
+      'Comemoração': 'experiência especial para comemorar'
+    };
+    const budgetRank = { '$': 1, '$$': 2, '$$$': 3, '$$$$': 4 };
+    const maxBudget = budgetRank[dineMatchDraft.budget] || 2;
+    const ranked = publicRestaurants
+      .map((restaurant, index) => {
+        const coordinate = restaurant.coordinate || coordinateForRestaurant(restaurant, index);
+        const distance = distanceKm(userLocation || searchCenter, coordinate);
+        if (Number.isFinite(distance) && distance > dineMatchDraft.radius) return null;
+        const searchable = normalize(`${restaurant.name} ${restaurant.type} ${restaurant.description || ''} ${(restaurant.tags || []).join(' ')} ${(restaurant.highlights || []).join(' ')}`);
+        const cuisineMatches = dineMatchDraft.cuisines.filter((cuisine) => searchable.includes(normalize(cuisine)));
+        if (dineMatchDraft.cuisines.length && !cuisineMatches.length) return null;
+        const occasionMatch = restaurantSearchMatch(restaurant, occasionQueries[dineMatchDraft.occasion] || '');
+        const priceRank = budgetRank[restaurant.price] || 2;
+        const withinBudget = priceRank <= maxBudget;
+        const reasons = [
+          ...cuisineMatches,
+          ...(occasionMatch.matches && occasionMatch.reasons.length ? occasionMatch.reasons.slice(0, 1) : []),
+          ...(withinBudget ? ['Dentro do orçamento'] : []),
+          ...(Number.isFinite(distance) ? [`A ${formatDistance(distance)}`] : [])
+        ];
+        const score = 38
+          + cuisineMatches.length * 22
+          + (occasionMatch.matches ? 16 : 0)
+          + (withinBudget ? 14 : -18)
+          + Math.max(0, 12 - Number(distance || 0) * 2)
+          + Math.min(10, scoreValue(restaurant) * 2);
+        return {
+          ...restaurant,
+          distanceKm: distance,
+          dineMatchScore: Math.max(52, Math.min(98, Math.round(score))),
+          dineMatchReasons: reasons.length ? reasons : ['Boa avaliação do grupo']
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.dineMatchScore - a.dineMatchScore || scoreValue(b) - scoreValue(a))
+      .slice(0, 3);
+    setDineMatchResults(ranked);
+    if (!ranked.length) Alert.alert('Dine Match', 'Não encontramos opções com todos esses critérios. Tente aumentar a distância ou escolher outra cozinha.');
+  }
+
+  async function shareDineMatchInvite() {
+    const cuisines = dineMatchDraft.cuisines.length ? dineMatchDraft.cuisines.join(', ') : 'qualquer cozinha';
+    try {
+      await Share.share({
+        title: 'Meu grupo no Dine Match',
+        message: `Vamos escolher onde comer? Montei um Dine Match para ${dineMatchDraft.participants} pessoas: ${dineMatchDraft.occasion}, ${cuisines}, orçamento ${dineMatchDraft.budget} e até ${dineMatchDraft.radius} km. ${publicAppUrl || ''}`.trim()
+      });
+    } catch (error) {
+      Alert.alert('Dine Match', 'Não conseguimos abrir o compartilhamento agora.');
+    }
+  }
+
+  function renderDineMatchScreen() {
+    const cuisines = ['Pizza', 'Japonesa', 'Brasileira', 'Hambúrguer', 'Italiana', 'Cafés'];
+    const occasions = [
+      ['Encontro com amigos', 'people-outline'],
+      ['Date romântico', 'heart-outline'],
+      ['Família', 'happy-outline'],
+      ['Comemoração', 'sparkles-outline']
+    ];
+    return (
+      <View style={styles.dineMatchPage}>
+        {renderScreenHeader('Dine Match', 'Todo mundo combina. O Dine encontra o lugar.')}
+        <LinearGradient colors={['#F24A18', '#FF713F']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.dineMatchHero}>
+          <View style={styles.dineMatchHeroIcon}><Image source={mascotAssets.anticipation} resizeMode="contain" style={styles.dineMatchHeroMascot} /></View>
+          <View style={styles.dineMatchHeroCopy}>
+            <Text style={styles.dineMatchHeroEyebrow}>ESCOLHA EM GRUPO</Text>
+            <Text style={styles.dineMatchHeroTitle}>Menos indecisão.{`\n`}Mais mesa.</Text>
+            <Text style={styles.dineMatchHeroText}>Combine o gosto da turma, orçamento e distância para descobrir o match da vez.</Text>
+          </View>
+        </LinearGradient>
+
+        <View style={styles.dineMatchInviteCard}>
+          <View style={styles.dineMatchInviteIcon}><Ionicons name="link-outline" size={20} color={colors.redDark} /></View>
+          <View style={styles.dineMatchInviteCopy}>
+            <Text style={styles.dineMatchInviteTitle}>Monte o grupo</Text>
+            <Text style={styles.dineMatchInviteText}>{dineMatchDraft.participants} pessoas nesta mesa</Text>
+          </View>
+          <View style={styles.dineMatchStepper}>
+            <Pressable accessibilityLabel="Remover participante" onPress={() => updateDineMatchDraft({ participants: Math.max(2, dineMatchDraft.participants - 1) })} style={styles.dineMatchStepButton}><Ionicons name="remove" size={17} color={colors.ink} /></Pressable>
+            <Text style={styles.dineMatchStepValue}>{dineMatchDraft.participants}</Text>
+            <Pressable accessibilityLabel="Adicionar participante" onPress={() => updateDineMatchDraft({ participants: Math.min(12, dineMatchDraft.participants + 1) })} style={styles.dineMatchStepButton}><Ionicons name="add" size={17} color={colors.ink} /></Pressable>
+          </View>
+          <Pressable accessibilityLabel="Compartilhar escolhas do Dine Match" onPress={shareDineMatchInvite} style={styles.dineMatchShare}><Ionicons name="share-social-outline" size={19} color="#FFFFFF" /></Pressable>
+        </View>
+
+        <Text style={styles.dineMatchQuestion}>Qual é o clima?</Text>
+        <View style={styles.dineMatchOptionGrid}>
+          {occasions.map(([label, icon]) => {
+            const active = dineMatchDraft.occasion === label;
+            return (
+              <Pressable key={label} onPress={() => updateDineMatchDraft({ occasion: label })} style={[styles.dineMatchOption, active && styles.dineMatchOptionActive]}>
+                <Ionicons name={icon} size={19} color={active ? colors.redDark : colors.muted} />
+                <Text style={[styles.dineMatchOptionText, active && styles.dineMatchOptionTextActive]}>{label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <Text style={styles.dineMatchQuestion}>O que a turma toparia?</Text>
+        <Text style={styles.dineMatchHelper}>Pode escolher mais de uma cozinha.</Text>
+        <View style={styles.dineMatchChips}>
+          {cuisines.map((cuisine) => {
+            const active = dineMatchDraft.cuisines.includes(cuisine);
+            return <Pressable key={cuisine} onPress={() => toggleDineMatchCuisine(cuisine)} style={[styles.dineMatchChip, active && styles.dineMatchChipActive]}><Text style={[styles.dineMatchChipText, active && styles.dineMatchChipTextActive]}>{cuisine}</Text>{active ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : null}</Pressable>;
+          })}
+        </View>
+
+        <View style={styles.dineMatchTwoColumns}>
+          <View style={styles.dineMatchColumn}>
+            <Text style={styles.dineMatchQuestion}>Orçamento</Text>
+            <View style={styles.dineMatchSegment}>
+              {['$', '$$', '$$$', '$$$$'].map((price) => <Pressable key={price} onPress={() => updateDineMatchDraft({ budget: price })} style={[styles.dineMatchSegmentItem, dineMatchDraft.budget === price && styles.dineMatchSegmentItemActive]}><Text style={[styles.dineMatchSegmentText, dineMatchDraft.budget === price && styles.dineMatchSegmentTextActive]}>{price}</Text></Pressable>)}
+            </View>
+          </View>
+          <View style={styles.dineMatchColumn}>
+            <Text style={styles.dineMatchQuestion}>Distância</Text>
+            <View style={styles.dineMatchSegment}>
+              {[3, 5, 10].map((distance) => <Pressable key={distance} onPress={() => updateDineMatchDraft({ radius: distance })} style={[styles.dineMatchSegmentItem, dineMatchDraft.radius === distance && styles.dineMatchSegmentItemActive]}><Text style={[styles.dineMatchSegmentText, dineMatchDraft.radius === distance && styles.dineMatchSegmentTextActive]}>{distance} km</Text></Pressable>)}
+            </View>
+          </View>
+        </View>
+
+        <Pressable accessibilityRole="button" accessibilityLabel="Encontrar o Dine Match" onPress={generateDineMatch} style={({ pressed }) => [styles.dineMatchGenerate, pressed && styles.activePress]}>
+          <Ionicons name="sparkles" size={19} color="#FFFFFF" />
+          <Text style={styles.dineMatchGenerateText}>Encontrar nosso Match</Text>
+        </Pressable>
+
+        {dineMatchResults.length ? (
+          <View style={styles.dineMatchResults}>
+            <View style={styles.dineMatchResultHeading}>
+              <View><Text style={styles.dineMatchResultEyebrow}>RESULTADO DO GRUPO</Text><Text style={styles.dineMatchResultTitle}>Deu Match!</Text></View>
+              <Ionicons name="sparkles" size={25} color={colors.ochre} />
+            </View>
+            {dineMatchResults.map((restaurant, index) => (
+              <Pressable key={restaurant.id} accessibilityLabel={`Abrir ${restaurant.name}, ${restaurant.dineMatchScore}% de compatibilidade`} onPress={() => setSelectedRestaurant(restaurant)} style={[styles.dineMatchResultCard, index === 0 && styles.dineMatchResultCardWinner]}>
+                <Image source={imageSource(restaurant.coverPhoto || restaurant.image || restaurant.logo)} style={styles.dineMatchResultImage} />
+                {index === 0 ? <View style={styles.dineMatchWinnerBadge}><Ionicons name="trophy" size={11} color="#FFFFFF" /><Text style={styles.dineMatchWinnerBadgeText}>Melhor Match</Text></View> : null}
+                <View style={styles.dineMatchResultCopy}>
+                  <View style={styles.dineMatchResultNameRow}><Text numberOfLines={1} style={styles.dineMatchResultName}>{restaurant.name}</Text><Text style={styles.dineMatchPercent}>{restaurant.dineMatchScore}%</Text></View>
+                  <Text numberOfLines={1} style={styles.dineMatchResultMeta}>{restaurant.type} • {restaurant.price || '$$'} • {formatDistance(restaurant.distanceKm)}</Text>
+                  <View style={styles.dineMatchReasonRow}>{restaurant.dineMatchReasons.slice(0, 2).map((reason) => <View key={reason} style={styles.dineMatchReason}><Text style={styles.dineMatchReasonText}>{reason}</Text></View>)}</View>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+      </View>
+    );
+  }
+
   function renderHome() {
     const discoveryCategories = [
       ['Sushi', 'sushi', discoveryCategoryAssets.sushi],
@@ -4456,6 +4779,9 @@ function postKey(restaurantId, postId) {
         <View style={styles.discoveryTopBar}>
           <BrandLogo />
           <View style={styles.discoveryTopActions}>
+            <Pressable accessibilityRole="button" accessibilityLabel="Abrir Dine Match" hitSlop={8} onPress={() => navigateTo('dineMatch')} style={({ pressed }) => [styles.discoveryIconButton, styles.dineMatchHeaderButton, pressed && styles.activePress]}>
+              <Ionicons name="people-outline" size={24} color={colors.ink} />
+            </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="Abrir notificações" hitSlop={8} onPress={openNotifications} style={({ pressed }) => [styles.discoveryIconButton, pressed && styles.activePress]}>
               <Ionicons name="notifications-outline" size={24} color={colors.ink} />
               {unreadActivityCount ? <View style={styles.discoveryNotificationDot} /> : null}
@@ -4476,12 +4802,12 @@ function postKey(restaurantId, postId) {
         </View>
 
         <View style={styles.discoverySearch}>
-          <Ionicons name="search-outline" size={21} color={colors.muted} />
+          <Ionicons name={query.trim() ? 'sparkles' : 'search-outline'} size={21} color={query.trim() ? colors.redDark : colors.muted} />
           <TextInput
             value={query}
             onChangeText={setQuery}
             onSubmitEditing={() => navigateTo('results')}
-            placeholder="O que você quer comer?"
+            placeholder="Descreva o lugar que você procura..."
             placeholderTextColor="#918d86"
             style={styles.discoverySearchInput}
           />
@@ -4489,6 +4815,8 @@ function postKey(restaurantId, postId) {
             <Ionicons name="options-outline" size={20} color={colors.ink} />
           </Pressable>
         </View>
+
+        {renderIntelligentSearchAssist('explore')}
 
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.discoveryCategoryRow}>
           {discoveryCategories.map(([label, term, categoryImage]) => {
@@ -4790,8 +5118,8 @@ function postKey(restaurantId, postId) {
       <View style={styles.mapPage}>
         <View style={styles.mapSearchHeader}>
           <View style={styles.searchPageField}>
-          <Ionicons name="search-outline" size={21} color={colors.muted} />
-            <TextInput value={query} onChangeText={setQuery} placeholder="Onde vamos comer?" placeholderTextColor="#8A8179" style={styles.pageInput} />
+          <Ionicons name={query.trim() ? 'sparkles' : 'search-outline'} size={21} color={query.trim() ? colors.redDark : colors.muted} />
+            <TextInput value={query} onChangeText={setQuery} placeholder="Descreva o lugar que você procura..." placeholderTextColor="#8A8179" style={styles.pageInput} />
           </View>
           <Pressable accessibilityRole="button" accessibilityLabel="Abrir meu perfil" onPress={() => setTab('Perfil')} style={styles.mapProfileAvatar}>
             {currentUser?.photo ? (
@@ -4801,6 +5129,7 @@ function postKey(restaurantId, postId) {
             )}
           </Pressable>
         </View>
+        {renderIntelligentSearchAssist('map')}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mapQuickFilters}>
           {[
             ['Perto de mim', 'navigate', selectedArea === 'Perto de mim' || radiusKm === 1, requestUserLocation],
@@ -7969,7 +8298,8 @@ function postKey(restaurantId, postId) {
       collectionDetail: renderCollectionDetail,
       restaurantRegister: renderRestaurantRegisterScreen,
       restaurantPanel: renderRestaurantPanelScreen,
-      adminApprovals: renderAdminApprovalsScreen
+      adminApprovals: renderAdminApprovalsScreen,
+      dineMatch: renderDineMatchScreen
     };
     return (screens[activeScreen?.name] || renderResultsScreen)();
   }
@@ -11169,6 +11499,7 @@ const styles = StyleSheet.create({
   discoveryTopBar: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   discoveryTopActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   discoveryIconButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  dineMatchHeaderButton: { borderRadius: 20 },
   discoveryNotificationDot: { position: 'absolute', right: 7, top: 7, width: 7, height: 7, borderRadius: 4, backgroundColor: colors.redDark, borderWidth: 1.5, borderColor: colors.card },
   discoveryAvatar: { width: 38, height: 38, borderRadius: 19, overflow: 'hidden', backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center' },
   discoveryAvatarImage: { width: '100%', height: '100%' },
@@ -11180,6 +11511,21 @@ const styles = StyleSheet.create({
   discoverySearch: { height: 48, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, flexDirection: 'row', alignItems: 'center', paddingLeft: 13, paddingRight: 5, gap: 8 },
   discoverySearchInput: { flex: 1, minWidth: 0, color: colors.ink, fontFamily: 'Nunito_400Regular', fontSize: 14 },
   discoveryFilterButton: { width: 38, height: 38, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
+  smartSearchSuggestions: { alignItems: 'center', gap: 7, paddingTop: 9, paddingRight: 16 },
+  smartSearchHint: { minHeight: 29, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  smartSearchHintText: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 11 },
+  smartSearchSuggestion: { minHeight: 29, borderRadius: 15, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  smartSearchSuggestionText: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 10 },
+  smartSearchUnderstood: { marginTop: 9, borderRadius: 10, backgroundColor: '#FFF4EE', borderWidth: 1, borderColor: 'rgba(241,61,11,0.14)', paddingHorizontal: 10, paddingVertical: 8, gap: 7 },
+  smartSearchUnderstoodMap: { marginTop: 7, marginBottom: 2 },
+  smartSearchUnderstoodTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  smartSearchBadge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  smartSearchBadgeText: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 11 },
+  smartSearchCount: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 10 },
+  smartSearchLabels: { gap: 6, paddingRight: 10 },
+  smartSearchLabel: { minHeight: 25, borderRadius: 13, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: colors.softLine, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  smartSearchLabelText: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 9 },
+  smartSearchFallback: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10 },
   discoveryCategoryRow: { gap: 12, paddingTop: 18, paddingBottom: 6, paddingRight: 20 },
   discoveryCategory: { width: 66, alignItems: 'center', gap: 7 },
   discoveryCategoryImage: { width: 60, height: 60, borderRadius: 16, overflow: 'hidden', backgroundColor: colors.surface },
@@ -11220,6 +11566,61 @@ const styles = StyleSheet.create({
   discoveryNewsImage: { width: '100%', aspectRatio: 1.25, borderRadius: 8, backgroundColor: colors.surface },
   discoveryNewsName: { color: colors.ink, fontFamily: bodyFont, fontSize: 14, marginTop: 2 },
   discoveryNewsMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11 },
+  dineMatchPage: { paddingBottom: 26 },
+  dineMatchHero: { minHeight: 210, marginTop: 8, borderRadius: 18, padding: 20, flexDirection: 'row', alignItems: 'center', gap: 16, overflow: 'hidden' },
+  dineMatchHeroIcon: { width: 82, height: 114, borderRadius: 24, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', transform: [{ rotate: '-3deg' }] },
+  dineMatchHeroMascot: { width: 112, height: 112 },
+  dineMatchHeroCopy: { flex: 1, minWidth: 0, gap: 5 },
+  dineMatchHeroEyebrow: { color: '#FFE1D5', fontFamily: 'Nunito_800ExtraBold', fontSize: 9, letterSpacing: 1.1 },
+  dineMatchHeroTitle: { color: '#FFFFFF', fontFamily: titleFont, fontSize: 27, lineHeight: 29 },
+  dineMatchHeroText: { color: 'rgba(255,255,255,0.9)', fontFamily: 'Nunito_700Bold', fontSize: 11, lineHeight: 16 },
+  dineMatchInviteCard: { minHeight: 72, marginTop: 14, borderRadius: 13, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  dineMatchInviteIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: '#FFF1EA', alignItems: 'center', justifyContent: 'center' },
+  dineMatchInviteCopy: { flex: 1, minWidth: 0 },
+  dineMatchInviteTitle: { color: colors.ink, fontFamily: 'Nunito_800ExtraBold', fontSize: 13 },
+  dineMatchInviteText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, marginTop: 1 },
+  dineMatchStepper: { minHeight: 34, borderRadius: 17, backgroundColor: colors.bg, borderWidth: 1, borderColor: colors.line, flexDirection: 'row', alignItems: 'center' },
+  dineMatchStepButton: { width: 29, height: 32, alignItems: 'center', justifyContent: 'center' },
+  dineMatchStepValue: { minWidth: 18, textAlign: 'center', color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  dineMatchShare: { width: 36, height: 36, borderRadius: 12, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center' },
+  dineMatchQuestion: { color: colors.ink, fontFamily: 'Nunito_800ExtraBold', fontSize: 15, marginTop: 20, marginBottom: 9 },
+  dineMatchHelper: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, marginTop: -6, marginBottom: 9 },
+  dineMatchOptionGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 8 },
+  dineMatchOption: { width: '49%', minHeight: 48, borderRadius: 11, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  dineMatchOptionActive: { borderColor: 'rgba(241,61,11,0.5)', backgroundColor: '#FFF2EC' },
+  dineMatchOptionText: { flex: 1, color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 11 },
+  dineMatchOptionTextActive: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold' },
+  dineMatchChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  dineMatchChip: { minHeight: 35, borderRadius: 18, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  dineMatchChipActive: { borderColor: colors.redDark, backgroundColor: colors.redDark },
+  dineMatchChipText: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 11 },
+  dineMatchChipTextActive: { color: '#FFFFFF', fontFamily: 'Nunito_800ExtraBold' },
+  dineMatchTwoColumns: { flexDirection: 'row', gap: 10 },
+  dineMatchColumn: { flex: 1, minWidth: 0 },
+  dineMatchSegment: { minHeight: 40, borderRadius: 10, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', padding: 3, flexDirection: 'row', alignItems: 'stretch' },
+  dineMatchSegmentItem: { flex: 1, minWidth: 0, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
+  dineMatchSegmentItemActive: { backgroundColor: '#FFF0E9' },
+  dineMatchSegmentText: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 9 },
+  dineMatchSegmentTextActive: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold' },
+  dineMatchGenerate: { minHeight: 52, marginTop: 22, borderRadius: 12, backgroundColor: colors.redDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, shadowColor: colors.redDark, shadowOpacity: 0.22, shadowRadius: 12, elevation: 4 },
+  dineMatchGenerateText: { color: '#FFFFFF', fontFamily: 'Nunito_800ExtraBold', fontSize: 14 },
+  dineMatchResults: { marginTop: 24, gap: 9 },
+  dineMatchResultHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
+  dineMatchResultEyebrow: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 9, letterSpacing: 0.9 },
+  dineMatchResultTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 24, lineHeight: 28 },
+  dineMatchResultCard: { minHeight: 92, borderRadius: 13, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', padding: 8, flexDirection: 'row', alignItems: 'center', gap: 9, overflow: 'hidden' },
+  dineMatchResultCardWinner: { borderColor: 'rgba(241,61,11,0.45)', backgroundColor: '#FFF9F5' },
+  dineMatchResultImage: { width: 76, height: 76, borderRadius: 10, backgroundColor: colors.surface },
+  dineMatchWinnerBadge: { position: 'absolute', left: 11, top: 11, minHeight: 20, borderRadius: 10, backgroundColor: colors.redDark, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 3, zIndex: 2 },
+  dineMatchWinnerBadgeText: { color: '#FFFFFF', fontFamily: 'Nunito_800ExtraBold', fontSize: 7 },
+  dineMatchResultCopy: { flex: 1, minWidth: 0, gap: 3 },
+  dineMatchResultNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dineMatchResultName: { flex: 1, minWidth: 0, color: colors.ink, fontFamily: 'Nunito_800ExtraBold', fontSize: 14 },
+  dineMatchPercent: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 12 },
+  dineMatchResultMeta: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9 },
+  dineMatchReasonRow: { flexDirection: 'row', gap: 4, marginTop: 3 },
+  dineMatchReason: { minHeight: 20, maxWidth: '48%', borderRadius: 10, backgroundColor: '#FFF0E9', paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center' },
+  dineMatchReasonText: { color: colors.redDark, fontFamily: 'Nunito_700Bold', fontSize: 7 },
   socialFeedPage: { backgroundColor: colors.card },
   socialFeedHeader: { paddingHorizontal: 16, paddingTop: 4, borderBottomWidth: 1, borderBottomColor: colors.softLine },
   socialFeedTopBar: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
