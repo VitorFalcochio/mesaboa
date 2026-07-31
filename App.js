@@ -131,6 +131,7 @@ import {
   dineMatchVoteSummary,
   rankDineMatchCandidates
 } from './src/dineMatch';
+import { MapView, Marker } from './src/nativeMaps';
 
 const colors = {
   bg: '#FFFDF9',
@@ -369,9 +370,6 @@ function postAuthorAvatar(post, currentUser) {
   return String(post?.avatar || post?.authorProfile?.avatar || '').trim();
 }
 
-const NativeMaps = Platform.OS !== 'web' ? require('react-native-maps') : null;
-const MapView = NativeMaps?.default;
-const Marker = NativeMaps?.Marker;
 const storageKeys = {
   restaurants: 'dineRestaurantsRN',
   favorites: 'dineFavoritesRN',
@@ -416,7 +414,13 @@ const mascotAssets = {
   reservationConfirmed: require('./Designer/Mascote/mascote-reserva-confirmada.png'),
   waitlist: require('./Designer/Mascote/mascote-lista-espera.png'),
   wave: require('./Designer/Mascote/mascote-aceno.png'),
-  thumbsUp: require('./Designer/Mascote/mascote-joinha.png')
+  thumbsUp: require('./Designer/Mascote/mascote-joinha.png'),
+  dineMatchVote: require('./Designer/Mascote/mascote-dine-match-voto.png'),
+  dineMatchWinner: require('./Designer/Mascote/mascote-dine-match-vencedor.png'),
+  smartSearch: require('./Designer/Mascote/mascote-busca-inteligente.png'),
+  mapFound: require('./Designer/Mascote/mascote-mapa-encontrado.png'),
+  achievement: require('./Designer/Mascote/mascote-conquista.png'),
+  emptyState: require('./Designer/Mascote/mascote-estado-vazio.png')
 };
 const discoveryCategoryAssets = {
   sushi: require('./assets/categories/categoria-sushi.png'),
@@ -4693,6 +4697,12 @@ function postKey(restaurantId, postId) {
     }
     return (
       <View style={[styles.smartSearchUnderstood, context === 'map' && styles.smartSearchUnderstoodMap]}>
+        <Image
+          accessibilityLabel={context === 'map' ? 'Mascote Dine indicando local no mapa' : 'Mascote Dine usando busca inteligente'}
+          source={context === 'map' ? (nearbyRestaurants.length ? mascotAssets.mapFound : mascotAssets.emptyState) : mascotAssets.smartSearch}
+          resizeMode="contain"
+          style={styles.smartSearchMascot}
+        />
         <View style={styles.smartSearchUnderstoodTop}>
           <View style={styles.smartSearchBadge}>
             <Ionicons name="sparkles" size={12} color={colors.redDark} />
@@ -5003,7 +5013,12 @@ function postKey(restaurantId, postId) {
           <View style={styles.dineMatchResults}>
             <View style={styles.dineMatchResultHeading}>
               <View><Text style={styles.dineMatchResultEyebrow}>{dineMatchGroup?.status === 'active' ? 'Votação do grupo' : 'Resultado do grupo'}</Text><Text style={styles.dineMatchResultTitle}>Deu Match!</Text></View>
-              <Ionicons name="sparkles" size={25} color={colors.ochre} />
+              <Image
+                accessibilityLabel={dineMatchGroup?.status === 'finished' ? 'Mascote Dine comemorando o vencedor' : 'Mascote Dine acompanhando a votação'}
+                source={dineMatchGroup?.status === 'finished' ? mascotAssets.dineMatchWinner : mascotAssets.dineMatchVote}
+                resizeMode="contain"
+                style={styles.dineMatchResultMascot}
+              />
             </View>
             {rankedResults.map((restaurant, index) => {
               const summary = dineMatchVoteSummary(dineMatchGroup, restaurant.id);
@@ -5536,6 +5551,7 @@ function postKey(restaurantId, postId) {
             </View>
           ) : (
             <View style={styles.emptyState}>
+              <Image accessibilityLabel="Mascote Dine sem locais neste raio" source={mascotAssets.emptyState} resizeMode="contain" style={styles.emptyStateMascot} />
               <Text style={styles.emptyTitle}>Nada nesse raio</Text>
               <Text style={styles.emptyText}>Aumente o raio ou escolha outro bairro para ver parceiros do Dine.</Text>
             </View>
@@ -5873,6 +5889,7 @@ function postKey(restaurantId, postId) {
             favoriteRestaurants.map((item) => <MiniRestaurant key={item.id} item={item} onPress={setSelectedRestaurant} />)
           ) : (
             <View style={styles.emptyState}>
+              <Image accessibilityLabel="Mascote Dine com bandeja vazia" source={mascotAssets.emptyState} resizeMode="contain" style={styles.emptyStateMascot} />
               <Text style={styles.emptyTitle}>Nenhum favorito ainda</Text>
               <Text style={styles.emptyText}>Salve restaurantes para construir sua lista pessoal.</Text>
             </View>
@@ -6121,7 +6138,7 @@ function postKey(restaurantId, postId) {
 
         <View style={styles.dineProfileLevelCard}>
           <View style={styles.dineProfileMedal}>
-            <MaterialCommunityIcons name="silverware-fork-knife" size={42} color="#F8D9AA" />
+            <Image accessibilityLabel="Mascote Dine com medalha de conquista" source={mascotAssets.achievement} resizeMode="contain" style={styles.dineProfileAchievementMascot} />
           </View>
           <View style={styles.dineProfileLevelCopy}>
             <Text style={styles.dineProfileLevelSmall}>Nível 12</Text>
@@ -6400,7 +6417,7 @@ function postKey(restaurantId, postId) {
           </View>
         ) : (
           <Pressable onPress={openFeedComposer} style={styles.profileEmptyMedia}>
-            <Ionicons name="camera-outline" size={25} color={colors.redDark} />
+            <Image accessibilityLabel="Mascote Dine aguardando sua primeira descoberta" source={mascotAssets.emptyState} resizeMode="contain" style={styles.profileEmptyMascot} />
             <Text style={styles.profileEmptyMediaTitle}>Compartilhe sua primeira descoberta</Text>
             <Text style={styles.profileEmptyMediaText}>Suas publicações e avaliações aparecerão aqui.</Text>
           </Pressable>
@@ -6409,7 +6426,7 @@ function postKey(restaurantId, postId) {
         <Text style={styles.profileJourneyTitle}>Sua jornada no Dine</Text>
         <View style={styles.dineProfileLevelCard}>
           <View style={styles.dineProfileMedal}>
-            <MaterialCommunityIcons name="silverware-fork-knife" size={42} color="#F8D9AA" />
+            <Image accessibilityLabel="Mascote Dine com medalha de conquista" source={mascotAssets.achievement} resizeMode="contain" style={styles.dineProfileAchievementMascot} />
           </View>
           <View style={styles.dineProfileLevelCopy}>
             <Text style={styles.dineProfileLevelSmall}>Nível {rankIndex}</Text>
@@ -11336,7 +11353,8 @@ const styles = StyleSheet.create({
   dineProfileStatValue: { color: colors.ink, fontFamily: bodyFont, fontSize: 24, lineHeight: 27 },
   dineProfileStatLabel: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 13, lineHeight: 16, textAlign: 'center' },
   dineProfileLevelCard: { minHeight: 146, borderRadius: 18, backgroundColor: '#321D12', padding: 18, flexDirection: 'row', alignItems: 'center', gap: 18, marginBottom: 22, overflow: 'hidden' },
-  dineProfileMedal: { width: 96, height: 96, borderRadius: 24, backgroundColor: '#9A4E28', borderWidth: 3, borderColor: '#D98A4C', alignItems: 'center', justifyContent: 'center' },
+  dineProfileMedal: { width: 96, height: 96, borderRadius: 24, backgroundColor: '#9A4E28', borderWidth: 3, borderColor: '#D98A4C', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  dineProfileAchievementMascot: { width: 106, height: 106 },
   dineProfileLevelCopy: { flex: 1, minWidth: 0 },
   dineProfileLevelSmall: { color: colors.card, fontFamily: bodyFont, fontSize: 15, marginBottom: 6 },
   dineProfileLevelTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
@@ -11799,8 +11817,9 @@ const styles = StyleSheet.create({
   smartSearchHintText: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 11 },
   smartSearchSuggestion: { minHeight: 29, borderRadius: 15, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
   smartSearchSuggestionText: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 10 },
-  smartSearchUnderstood: { marginTop: 9, borderRadius: 10, backgroundColor: '#FFF4EE', borderWidth: 1, borderColor: 'rgba(241,61,11,0.14)', paddingHorizontal: 10, paddingVertical: 8, gap: 7 },
+  smartSearchUnderstood: { position: 'relative', minHeight: 74, marginTop: 9, borderRadius: 10, backgroundColor: '#FFF4EE', borderWidth: 1, borderColor: 'rgba(241,61,11,0.14)', paddingLeft: 10, paddingRight: 72, paddingVertical: 8, gap: 7, overflow: 'hidden' },
   smartSearchUnderstoodMap: { marginTop: 7, marginBottom: 2 },
+  smartSearchMascot: { position: 'absolute', right: -3, bottom: -9, width: 76, height: 76 },
   smartSearchUnderstoodTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   smartSearchBadge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   smartSearchBadgeText: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 11 },
@@ -11888,7 +11907,8 @@ const styles = StyleSheet.create({
   dineMatchGenerate: { minHeight: 52, marginTop: 22, borderRadius: 12, backgroundColor: colors.redDark, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, shadowColor: colors.redDark, shadowOpacity: 0.22, shadowRadius: 12, elevation: 4 },
   dineMatchGenerateText: { color: '#FFFFFF', fontFamily: 'Nunito_800ExtraBold', fontSize: 14 },
   dineMatchResults: { marginTop: 24, gap: 9 },
-  dineMatchResultHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
+  dineMatchResultHeading: { minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2, overflow: 'hidden' },
+  dineMatchResultMascot: { width: 76, height: 76, marginRight: 2 },
   dineMatchResultEyebrow: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 9, letterSpacing: 0.9, textTransform: 'uppercase' },
   dineMatchResultTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 24, lineHeight: 28 },
   dineMatchResultCard: { minHeight: 92, borderRadius: 13, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', padding: 8, flexDirection: 'row', alignItems: 'center', gap: 9, overflow: 'hidden' },
@@ -12165,7 +12185,8 @@ const styles = StyleSheet.create({
   profileMediaGrid: { marginHorizontal: -18, flexDirection: 'row', flexWrap: 'wrap', gap: 1, backgroundColor: colors.line },
   profileMediaTile: { width: '33.1%', aspectRatio: 1, backgroundColor: colors.surface, overflow: 'hidden' },
   profileMediaImage: { width: '100%', height: '100%' },
-  profileEmptyMedia: { minHeight: 132, marginHorizontal: -18, alignItems: 'center', justifyContent: 'center', gap: 4, padding: 18, borderBottomWidth: 1, borderBottomColor: colors.line },
+  profileEmptyMedia: { minHeight: 190, marginHorizontal: -18, alignItems: 'center', justifyContent: 'center', gap: 4, padding: 18, borderBottomWidth: 1, borderBottomColor: colors.line },
+  profileEmptyMascot: { width: 104, height: 104, marginBottom: -5 },
   profileEmptyMediaTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 14, textAlign: 'center' },
   profileEmptyMediaText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11, textAlign: 'center' },
   profileJourneyTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 18, marginTop: 24, marginBottom: 10 },
@@ -12219,6 +12240,7 @@ const styles = StyleSheet.create({
   subscreenTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 22, lineHeight: 27 },
   subscreenSubtitle: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 17, marginTop: 1 },
   emptyState: { minHeight: 132, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, alignItems: 'center', justifyContent: 'center', padding: 18 },
+  emptyStateMascot: { width: 112, height: 112, marginBottom: -3 },
   emptyTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 18, textAlign: 'center' },
   emptyText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 12, lineHeight: 18, textAlign: 'center', marginTop: 5 },
   miniImage: { width: 112, height: 78, borderRadius: 8 },
