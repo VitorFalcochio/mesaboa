@@ -1304,6 +1304,112 @@ export async function saveWaitlistEntryToDb(entry) {
   });
 }
 
+function normalizeDineMatchGroup(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    inviteCode: row.invite_code || '',
+    hostId: row.host_id || '',
+    title: row.title || 'Nosso Dine Match',
+    status: row.status || 'active',
+    preferences: row.preferences || {},
+    restaurantIds: row.restaurant_legacy_ids || [],
+    winnerRestaurantId: row.winner_restaurant_legacy_id || '',
+    maxParticipants: Number(row.max_participants || 8),
+    expiresAt: row.expires_at || '',
+    createdAt: row.created_at || nowIso(),
+    participants: (row.dine_match_participants || []).map((participant) => ({
+      id: participant.id,
+      userId: participant.user_id,
+      displayName: participant.display_name || 'Participante',
+      preferences: participant.preferences || {},
+      joinedAt: participant.joined_at || ''
+    })),
+    votes: (row.dine_match_votes || []).map((vote) => ({
+      id: vote.id,
+      userId: vote.user_id,
+      restaurantId: vote.restaurant_legacy_id,
+      value: Number(vote.value || 0),
+      updatedAt: vote.updated_at || vote.created_at || ''
+    }))
+  };
+}
+
+export async function fetchDineMatchGroupFromDb(groupId) {
+  const client = requireClient();
+  if (!client || !groupId || !supabaseAuthEnabled) return null;
+  const { data, error } = await client
+    .from('dine_match_groups')
+    .select('*, dine_match_participants(*), dine_match_votes(*)')
+    .eq('id', groupId)
+    .single();
+  throwIfError(error);
+  return normalizeDineMatchGroup(data);
+}
+
+export async function createDineMatchGroupInDb({ preferences = {}, restaurantIds = [] } = {}, user) {
+  assertSignedIn(user);
+  if (!supabaseAuthEnabled) return null;
+  const client = requireClient();
+  const { data: groupId, error } = await client.rpc('create_dine_match_group', {
+    group_preferences: cleanData(preferences),
+    candidate_restaurant_ids: restaurantIds.map(String),
+    participant_name: String(user.name || 'Anfitrião').trim(),
+    participant_limit: Math.max(2, Math.min(20, Number(preferences.participants || 8)))
+  });
+  throwIfError(error);
+  return fetchDineMatchGroupFromDb(groupId);
+}
+
+export async function joinDineMatchGroupInDb(inviteCode, user, preferences = {}) {
+  assertSignedIn(user);
+  if (!supabaseAuthEnabled) return null;
+  const client = requireClient();
+  const { data: groupId, error } = await client.rpc('join_dine_match_group', {
+    target_invite_code: String(inviteCode || '').trim().toUpperCase(),
+    participant_name: String(user.name || 'Participante').trim(),
+    participant_preferences: cleanData(preferences)
+  });
+  throwIfError(error);
+  return fetchDineMatchGroupFromDb(groupId);
+}
+
+export async function saveDineMatchVoteInDb(groupId, restaurantId, value, user) {
+  assertSignedIn(user);
+  if (!supabaseAuthEnabled) return null;
+  const client = requireClient();
+  if (value !== 1 && value !== -1) {
+    const { error } = await client.from('dine_match_votes').delete()
+      .eq('group_id', groupId)
+      .eq('user_id', user.id)
+      .eq('restaurant_legacy_id', String(restaurantId));
+    throwIfError(error);
+    return fetchDineMatchGroupFromDb(groupId);
+  }
+  const { error } = await client.from('dine_match_votes').upsert({
+    group_id: groupId,
+    user_id: user.id,
+    restaurant_legacy_id: String(restaurantId),
+    value,
+    updated_at: nowIso()
+  }, { onConflict: 'group_id,user_id,restaurant_legacy_id' });
+  throwIfError(error);
+  return fetchDineMatchGroupFromDb(groupId);
+}
+
+export async function finishDineMatchGroupInDb(groupId, winnerRestaurantId, user) {
+  assertSignedIn(user);
+  if (!supabaseAuthEnabled) return null;
+  const client = requireClient();
+  const { error } = await client.from('dine_match_groups').update({
+    status: 'finished',
+    winner_restaurant_legacy_id: String(winnerRestaurantId || ''),
+    updated_at: nowIso()
+  }).eq('id', groupId).eq('host_id', user.id);
+  throwIfError(error);
+  return fetchDineMatchGroupFromDb(groupId);
+}
+
 export async function deleteUserAccountInDb(user) {
   const client = requireClient();
   if (!client || !user?.id) return;
