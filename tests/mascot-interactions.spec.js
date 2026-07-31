@@ -34,10 +34,30 @@ test('shows the mascot campaign carousel in Explore', async ({ page }) => {
 
   await createUserAccount(page);
   await expect(page.getByRole('button', { name: 'Abrir destaque Hoje combina com burger' })).toBeVisible();
-  await page.getByRole('button', { name: 'Mostrar destaque 4 de 4' }).click();
-  await expect(page.getByRole('button', { name: 'Abrir destaque Tem lugar novo na área' })).toBeVisible();
-  await page.getByRole('button', { name: 'Abrir destaque Tem lugar novo na área' }).click();
-  await expect(page.getByText('Novidades perto de você', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: /^(Destaque atual|Mostrar destaque) 1 de 4$/ }).click();
+  await page.waitForTimeout(700);
+  const campaignCarousel = page.getByLabel('Destaques do Dine');
+  await campaignCarousel.hover();
+  await page.mouse.wheel(354, 0);
+  await expect(page.getByRole('button', { name: 'Destaque atual 2 de 4' })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test('updates the feed photo count and dot while scrolling the gallery', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+
+  await createUserAccount(page);
+  await page.getByRole('tab', { name: 'Ir para Feed' }).click();
+  const gallery = page.getByLabel(/^Galeria de .+, [2-4] fotos$/).first();
+  await expect(gallery).toBeVisible();
+  const imageWrap = gallery.locator('xpath=..');
+  const initialCount = imageWrap.getByText(/^1\/[2-4]$/);
+  await expect(initialCount).toBeVisible();
+  const total = (await initialCount.textContent()).split('/')[1];
+  await gallery.hover();
+  await page.mouse.wheel(390, 0);
+  await expect(imageWrap.getByText(`2/${total}`, { exact: true })).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 
