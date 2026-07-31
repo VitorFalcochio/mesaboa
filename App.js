@@ -46,6 +46,7 @@ import {
   fetchRestaurantsFromDb,
   fetchSocialStateFromDb,
   fetchReservationStateFromDb,
+  fetchDineMatchGroupFromDb,
   supabaseReady,
   supabaseAuthEnabled,
   getSupabaseCurrentUser,
@@ -57,6 +58,7 @@ import {
   claimExternalPlaceInDb,
   claimRestaurantInDb,
   createInviteLinkInDb,
+  createDineMatchGroupInDb,
   createFeedPostInDb,
   deleteFeedPostInDb,
   createRestaurantInDb,
@@ -69,6 +71,7 @@ import {
   saveReviewToDb,
   saveRestaurantToDb,
   saveReservationToDb,
+  saveDineMatchVoteInDb,
   saveWaitlistEntryToDb,
   saveUserProfileToDb,
   seedRestaurantsIfEmpty,
@@ -82,7 +85,9 @@ import {
   updateReviewInDb,
   setFeedReactionInDb,
   setProfileFollowInDb,
-  markAppNotificationsReadInDb
+  markAppNotificationsReadInDb,
+  joinDineMatchGroupInDb,
+  finishDineMatchGroupInDb
 } from './supabaseConfig';
 import {
   areaOptions,
@@ -120,6 +125,12 @@ import {
   reservationWeekDays,
   waitlistStatusLabel
 } from './src/reservations';
+import {
+  applyDineMatchVote,
+  createLocalDineMatchGroup,
+  dineMatchVoteSummary,
+  rankDineMatchCandidates
+} from './src/dineMatch';
 
 const colors = {
   bg: '#FFFDF9',
@@ -1876,6 +1887,7 @@ export default function App() {
   const demoRestaurantSeededRef = useRef(false);
   const favoritesMutationRef = useRef(0);
   const socialMutationRef = useRef(0);
+  const dineMatchInviteHandledRef = useRef(false);
   const [fontsLoaded] = useFonts({
     Baloo2_800ExtraBold,
     Nunito_400Regular,
@@ -1974,6 +1986,45 @@ export default function App() {
     participants: 2
   });
   const [dineMatchResults, setDineMatchResults] = useState([]);
+  const [dineMatchGroup, setDineMatchGroup] = useState(null);
+  const [dineMatchJoinCode, setDineMatchJoinCode] = useState('');
+  const [dineMatchJoinMode, setDineMatchJoinMode] = useState(false);
+  const [dineMatchBusy, setDineMatchBusy] = useState(false);
+  const [dineMatchFeedback, setDineMatchFeedback] = useState('');
+
+  useEffect(() => {
+    if (!hydrated || !currentUser?.id || dineMatchInviteHandledRef.current) return undefined;
+    let active = true;
+    function handleInviteUrl(url) {
+      const match = String(url || '').match(/[?&]dineMatch=([a-z0-9]{4,12})/i);
+      if (!active || !match) return;
+      dineMatchInviteHandledRef.current = true;
+      setDineMatchJoinCode(match[1].toUpperCase());
+      setDineMatchJoinMode(true);
+      navigateTo('dineMatch');
+    }
+    Linking.getInitialURL().then(handleInviteUrl).catch(() => {});
+    const subscription = Linking.addEventListener?.('url', ({ url }) => handleInviteUrl(url));
+    return () => {
+      active = false;
+      subscription?.remove?.();
+    };
+  }, [currentUser?.id, hydrated]);
+
+  useEffect(() => {
+    if (!supabaseAuthEnabled || activeScreen?.name !== 'dineMatch' || !dineMatchGroup?.id) return undefined;
+    let active = true;
+    const refresh = () => fetchDineMatchGroupFromDb(dineMatchGroup.id)
+      .then((group) => {
+        if (active && group) syncDineMatchGroup(group);
+      })
+      .catch(() => {});
+    const interval = setInterval(refresh, 5000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [activeScreen?.name, dineMatchGroup?.id]);
 
   useEffect(() => {
     screenFade.setValue(0);
@@ -4680,7 +4731,7 @@ function postKey(restaurantId, postId) {
     setDineMatchDraft((current) => ({ ...current, ...patch }));
   }
 
-  function generateDineMatch() {
+  function buildDineMatchResults(draft = dineMatchDraft) {
     const occasionQueries = {
       'Encontro com amigos': 'ambiente para amigos',
       'Date romântico': 'lugar romântico para casal',
@@ -4688,16 +4739,16 @@ function postKey(restaurantId, postId) {
       'Comemoração': 'experiência especial para comemorar'
     };
     const budgetRank = { '$': 1, '$$': 2, '$$$': 3, '$$$$': 4 };
-    const maxBudget = budgetRank[dineMatchDraft.budget] || 2;
+    const maxBudget = budgetRank[draft.budget] || 2;
     const ranked = publicRestaurants
       .map((restaurant, index) => {
         const coordinate = restaurant.coordinate || coordinateForRestaurant(restaurant, index);
         const distance = distanceKm(userLocation || searchCenter, coordinate);
-        if (Number.isFinite(distance) && distance > dineMatchDraft.radius) return null;
+        if (Number.isFinite(distance) && distance > draft.radius) return null;
         const searchable = normalize(`${restaurant.name} ${restaurant.type} ${restaurant.description || ''} ${(restaurant.tags || []).join(' ')} ${(restaurant.highlights || []).join(' ')}`);
-        const cuisineMatches = dineMatchDraft.cuisines.filter((cuisine) => searchable.includes(normalize(cuisine)));
-        if (dineMatchDraft.cuisines.length && !cuisineMatches.length) return null;
-        const occasionMatch = restaurantSearchMatch(restaurant, occasionQueries[dineMatchDraft.occasion] || '');
+        const cuisineMatches = (draft.cuisines || []).filter((cuisine) => searchable.includes(normalize(cuisine)));
+        if ((draft.cuisines || []).length && !cuisineMatches.length) return null;
+        const occasionMatch = restaurantSearchMatch(restaurant, occasionQueries[draft.occasion] || '');
         const priceRank = budgetRank[restaurant.price] || 2;
         const withinBudget = priceRank <= maxBudget;
         const reasons = [
@@ -4722,16 +4773,111 @@ function postKey(restaurantId, postId) {
       .filter(Boolean)
       .sort((a, b) => b.dineMatchScore - a.dineMatchScore || scoreValue(b) - scoreValue(a))
       .slice(0, 3);
+    return ranked;
+  }
+
+  function generateDineMatch() {
+    const ranked = buildDineMatchResults();
     setDineMatchResults(ranked);
     if (!ranked.length) Alert.alert('Dine Match', 'Não encontramos opções com todos esses critérios. Tente aumentar a distância ou escolher outra cozinha.');
+    return ranked;
+  }
+
+  function syncDineMatchGroup(group) {
+    if (!group) return;
+    const preferences = { ...dineMatchDraft, ...(group.preferences || {}) };
+    const candidateIds = new Set((group.restaurantIds || []).map(String));
+    const candidates = buildDineMatchResults(preferences)
+      .filter((restaurant) => !candidateIds.size || candidateIds.has(String(restaurant.id)));
+    setDineMatchDraft(preferences);
+    setDineMatchResults(candidates);
+    setDineMatchGroup(group);
+    setDineMatchFeedback('');
+  }
+
+  async function createCollaborativeDineMatch() {
+    if (!currentUser?.id) {
+      Alert.alert('Entre no Dine', 'Crie ou acesse sua conta para montar um grupo colaborativo.');
+      return;
+    }
+    const ranked = generateDineMatch();
+    if (!ranked.length) return;
+    setDineMatchBusy(true);
+    setDineMatchFeedback('');
+    try {
+      const group = supabaseAuthEnabled
+        ? await createDineMatchGroupInDb({ preferences: dineMatchDraft, restaurantIds: ranked.map((item) => item.id) }, currentUser)
+        : createLocalDineMatchGroup({ user: currentUser, preferences: dineMatchDraft, restaurantIds: ranked.map((item) => item.id) });
+      syncDineMatchGroup(group);
+    } catch (error) {
+      setDineMatchFeedback('Não conseguimos criar o grupo agora. Confirme se a migration do Dine Match foi aplicada no Supabase.');
+    } finally {
+      setDineMatchBusy(false);
+    }
+  }
+
+  async function joinCollaborativeDineMatch() {
+    const code = dineMatchJoinCode.trim().toUpperCase();
+    if (!code || !currentUser?.id) return;
+    setDineMatchBusy(true);
+    setDineMatchFeedback('');
+    try {
+      let group = null;
+      if (supabaseAuthEnabled) {
+        group = await joinDineMatchGroupInDb(code, currentUser, dineMatchDraft);
+      } else if (dineMatchGroup?.inviteCode === code) {
+        group = dineMatchGroup;
+      }
+      if (!group) throw new Error('DINE_MATCH_NOT_FOUND');
+      syncDineMatchGroup(group);
+      setDineMatchJoinMode(false);
+    } catch (error) {
+      setDineMatchFeedback('Grupo não encontrado, expirado ou completo. Confira o código e tente novamente.');
+    } finally {
+      setDineMatchBusy(false);
+    }
+  }
+
+  async function voteOnDineMatch(restaurantId, value) {
+    if (!dineMatchGroup || !currentUser?.id || dineMatchGroup.status !== 'active') return;
+    const currentVote = (dineMatchGroup.votes || []).find((vote) => (
+      String(vote.userId) === String(currentUser.id) && String(vote.restaurantId) === String(restaurantId)
+    ));
+    const nextValue = currentVote?.value === value ? 0 : value;
+    const optimistic = applyDineMatchVote(dineMatchGroup, currentUser.id, restaurantId, nextValue);
+    setDineMatchGroup(optimistic);
+    if (!supabaseAuthEnabled) return;
+    try {
+      const remoteGroup = await saveDineMatchVoteInDb(dineMatchGroup.id, restaurantId, nextValue, currentUser);
+      if (remoteGroup) syncDineMatchGroup(remoteGroup);
+    } catch (error) {
+      setDineMatchGroup(dineMatchGroup);
+      setDineMatchFeedback('Seu voto não foi sincronizado. Tente novamente.');
+    }
+  }
+
+  async function finishCollaborativeDineMatch() {
+    const winner = rankDineMatchCandidates(dineMatchGroup, dineMatchResults)[0];
+    if (!winner || !dineMatchGroup || String(dineMatchGroup.hostId) !== String(currentUser?.id)) return;
+    const finished = { ...dineMatchGroup, status: 'finished', winnerRestaurantId: winner.id };
+    setDineMatchGroup(finished);
+    if (!supabaseAuthEnabled) return;
+    try {
+      const remoteGroup = await finishDineMatchGroupInDb(dineMatchGroup.id, winner.id, currentUser);
+      if (remoteGroup) syncDineMatchGroup(remoteGroup);
+    } catch (error) {
+      setDineMatchFeedback('Não conseguimos encerrar a votação agora.');
+    }
   }
 
   async function shareDineMatchInvite() {
     const cuisines = dineMatchDraft.cuisines.length ? dineMatchDraft.cuisines.join(', ') : 'qualquer cozinha';
+    const inviteCode = dineMatchGroup?.inviteCode || '';
+    const inviteUrl = publicAppUrl && inviteCode ? `${publicAppUrl}${publicAppUrl.includes('?') ? '&' : '?'}dineMatch=${inviteCode}` : publicAppUrl;
     try {
       await Share.share({
         title: 'Meu grupo no Dine Match',
-        message: `Vamos escolher onde comer? Montei um Dine Match para ${dineMatchDraft.participants} pessoas: ${dineMatchDraft.occasion}, ${cuisines}, orçamento ${dineMatchDraft.budget} e até ${dineMatchDraft.radius} km. ${publicAppUrl || ''}`.trim()
+        message: `Vamos escolher onde comer? Entre no meu Dine Match${inviteCode ? ` com o código ${inviteCode}` : ''}: ${dineMatchDraft.occasion}, ${cuisines}, orçamento ${dineMatchDraft.budget}. ${inviteUrl || ''}`.trim()
       });
     } catch (error) {
       Alert.alert('Dine Match', 'Não conseguimos abrir o compartilhamento agora.');
@@ -4746,6 +4892,11 @@ function postKey(restaurantId, postId) {
       ['Família', 'happy-outline'],
       ['Comemoração', 'sparkles-outline']
     ];
+    const rankedResults = dineMatchGroup ? rankDineMatchCandidates(dineMatchGroup, dineMatchResults) : dineMatchResults;
+    const winner = dineMatchGroup?.winnerRestaurantId
+      ? rankedResults.find((restaurant) => String(restaurant.id) === String(dineMatchGroup.winnerRestaurantId)) || rankedResults[0]
+      : rankedResults[0];
+    const isHost = Boolean(dineMatchGroup && String(dineMatchGroup.hostId) === String(currentUser?.id));
     return (
       <View style={styles.dineMatchPage}>
         {renderScreenHeader('Dine Match', 'Todo mundo combina. O Dine encontra o lugar.')}
@@ -4758,80 +4909,135 @@ function postKey(restaurantId, postId) {
           </View>
         </LinearGradient>
 
-        <View style={styles.dineMatchInviteCard}>
-          <View style={styles.dineMatchInviteIcon}><Ionicons name="link-outline" size={20} color={colors.redDark} /></View>
-          <View style={styles.dineMatchInviteCopy}>
-            <Text style={styles.dineMatchInviteTitle}>Monte o grupo</Text>
-            <Text style={styles.dineMatchInviteText}>{dineMatchDraft.participants} pessoas nesta mesa</Text>
-          </View>
-          <View style={styles.dineMatchStepper}>
-            <Pressable accessibilityLabel="Remover participante" onPress={() => updateDineMatchDraft({ participants: Math.max(2, dineMatchDraft.participants - 1) })} style={styles.dineMatchStepButton}><Ionicons name="remove" size={17} color={colors.ink} /></Pressable>
-            <Text style={styles.dineMatchStepValue}>{dineMatchDraft.participants}</Text>
-            <Pressable accessibilityLabel="Adicionar participante" onPress={() => updateDineMatchDraft({ participants: Math.min(12, dineMatchDraft.participants + 1) })} style={styles.dineMatchStepButton}><Ionicons name="add" size={17} color={colors.ink} /></Pressable>
-          </View>
-          <Pressable accessibilityLabel="Compartilhar escolhas do Dine Match" onPress={shareDineMatchInvite} style={styles.dineMatchShare}><Ionicons name="share-social-outline" size={19} color="#FFFFFF" /></Pressable>
-        </View>
-
-        <Text style={styles.dineMatchQuestion}>Qual é o clima?</Text>
-        <View style={styles.dineMatchOptionGrid}>
-          {occasions.map(([label, icon]) => {
-            const active = dineMatchDraft.occasion === label;
-            return (
-              <Pressable key={label} onPress={() => updateDineMatchDraft({ occasion: label })} style={[styles.dineMatchOption, active && styles.dineMatchOptionActive]}>
-                <Ionicons name={icon} size={19} color={active ? colors.redDark : colors.muted} />
-                <Text style={[styles.dineMatchOptionText, active && styles.dineMatchOptionTextActive]}>{label}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        <Text style={styles.dineMatchQuestion}>O que a turma toparia?</Text>
-        <Text style={styles.dineMatchHelper}>Pode escolher mais de uma cozinha.</Text>
-        <View style={styles.dineMatchChips}>
-          {cuisines.map((cuisine) => {
-            const active = dineMatchDraft.cuisines.includes(cuisine);
-            return <Pressable key={cuisine} onPress={() => toggleDineMatchCuisine(cuisine)} style={[styles.dineMatchChip, active && styles.dineMatchChipActive]}><Text style={[styles.dineMatchChipText, active && styles.dineMatchChipTextActive]}>{cuisine}</Text>{active ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : null}</Pressable>;
-          })}
-        </View>
-
-        <View style={styles.dineMatchTwoColumns}>
-          <View style={styles.dineMatchColumn}>
-            <Text style={styles.dineMatchQuestion}>Orçamento</Text>
-            <View style={styles.dineMatchSegment}>
-              {['$', '$$', '$$$', '$$$$'].map((price) => <Pressable key={price} onPress={() => updateDineMatchDraft({ budget: price })} style={[styles.dineMatchSegmentItem, dineMatchDraft.budget === price && styles.dineMatchSegmentItemActive]}><Text style={[styles.dineMatchSegmentText, dineMatchDraft.budget === price && styles.dineMatchSegmentTextActive]}>{price}</Text></Pressable>)}
+        {dineMatchGroup ? (
+          <View style={styles.dineMatchLiveGroup}>
+            <View style={styles.dineMatchLiveTop}>
+              <View style={styles.dineMatchInviteIcon}><Ionicons name="people" size={20} color={colors.redDark} /></View>
+              <View style={styles.dineMatchInviteCopy}>
+                <Text style={styles.dineMatchInviteTitle}>{dineMatchGroup.status === 'finished' ? 'Match encerrado' : 'Votação ao vivo'}</Text>
+                <Text style={styles.dineMatchInviteText}>{dineMatchGroup.participants?.length || 1} de {dineMatchGroup.maxParticipants} participantes</Text>
+              </View>
+              <View style={styles.dineMatchCodeBadge}><Text style={styles.dineMatchCodeLabel}>CÓDIGO</Text><Text selectable style={styles.dineMatchCodeValue}>{dineMatchGroup.inviteCode}</Text></View>
+              <Pressable accessibilityLabel="Compartilhar convite do Dine Match" onPress={shareDineMatchInvite} style={styles.dineMatchShare}><Ionicons name="share-social-outline" size={19} color="#FFFFFF" /></Pressable>
             </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.dineMatchParticipants}>
+              {(dineMatchGroup.participants || []).map((participant) => (
+                <View key={participant.id || participant.userId} style={styles.dineMatchParticipant}>
+                  <View style={styles.dineMatchParticipantAvatar}><Text style={styles.dineMatchParticipantInitial}>{(participant.displayName || 'P').slice(0, 1).toUpperCase()}</Text></View>
+                  <Text numberOfLines={1} style={styles.dineMatchParticipantName}>{String(participant.userId) === String(currentUser?.id) ? 'Você' : participant.displayName}</Text>
+                </View>
+              ))}
+              <Pressable onPress={shareDineMatchInvite} style={styles.dineMatchParticipantAdd}><Ionicons name="add" size={17} color={colors.redDark} /><Text style={styles.dineMatchParticipantAddText}>Convidar</Text></Pressable>
+            </ScrollView>
+            <Pressable accessibilityRole="button" accessibilityLabel="Sair do grupo Dine Match" onPress={() => { setDineMatchGroup(null); setDineMatchResults([]); setDineMatchJoinCode(''); setDineMatchFeedback(''); }} style={styles.dineMatchLeaveGroup}>
+              <Ionicons name={dineMatchGroup.status === 'finished' ? 'refresh-outline' : 'exit-outline'} size={15} color={colors.muted} />
+              <Text style={styles.dineMatchLeaveGroupText}>{dineMatchGroup.status === 'finished' ? 'Criar outro Dine Match' : 'Sair deste grupo'}</Text>
+            </Pressable>
           </View>
-          <View style={styles.dineMatchColumn}>
-            <Text style={styles.dineMatchQuestion}>Distância</Text>
-            <View style={styles.dineMatchSegment}>
-              {[3, 5, 10].map((distance) => <Pressable key={distance} onPress={() => updateDineMatchDraft({ radius: distance })} style={[styles.dineMatchSegmentItem, dineMatchDraft.radius === distance && styles.dineMatchSegmentItemActive]}><Text style={[styles.dineMatchSegmentText, dineMatchDraft.radius === distance && styles.dineMatchSegmentTextActive]}>{distance} km</Text></Pressable>)}
+        ) : (
+          <>
+            <View style={styles.dineMatchInviteCard}>
+              <View style={styles.dineMatchInviteIcon}><Ionicons name="link-outline" size={20} color={colors.redDark} /></View>
+              <View style={styles.dineMatchInviteCopy}>
+                <Text style={styles.dineMatchInviteTitle}>Monte o grupo</Text>
+                <Text style={styles.dineMatchInviteText}>{dineMatchDraft.participants} pessoas nesta mesa</Text>
+              </View>
+              <View style={styles.dineMatchStepper}>
+                <Pressable accessibilityLabel="Remover participante" onPress={() => updateDineMatchDraft({ participants: Math.max(2, dineMatchDraft.participants - 1) })} style={styles.dineMatchStepButton}><Ionicons name="remove" size={17} color={colors.ink} /></Pressable>
+                <Text style={styles.dineMatchStepValue}>{dineMatchDraft.participants}</Text>
+                <Pressable accessibilityLabel="Adicionar participante" onPress={() => updateDineMatchDraft({ participants: Math.min(12, dineMatchDraft.participants + 1) })} style={styles.dineMatchStepButton}><Ionicons name="add" size={17} color={colors.ink} /></Pressable>
+              </View>
+              <Pressable accessibilityLabel="Entrar em um Dine Match" onPress={() => setDineMatchJoinMode((value) => !value)} style={styles.dineMatchJoinShortcut}><Ionicons name="enter-outline" size={19} color={colors.redDark} /></Pressable>
             </View>
-          </View>
-        </View>
+            {dineMatchJoinMode ? (
+              <View style={styles.dineMatchJoinCard}>
+                <View style={styles.dineMatchJoinCopy}><Text style={styles.dineMatchJoinTitle}>Entrar em um grupo</Text><Text style={styles.dineMatchJoinText}>Digite o código enviado pelo anfitrião.</Text></View>
+                <TextInput accessibilityLabel="Código do Dine Match" value={dineMatchJoinCode} onChangeText={(value) => setDineMatchJoinCode(value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))} placeholder="ABC123" autoCapitalize="characters" maxLength={8} style={styles.dineMatchJoinInput} />
+                <Pressable accessibilityRole="button" accessibilityLabel="Entrar no grupo Dine Match" disabled={!dineMatchJoinCode.trim() || dineMatchBusy} onPress={joinCollaborativeDineMatch} style={[styles.dineMatchJoinButton, (!dineMatchJoinCode.trim() || dineMatchBusy) && styles.disabledButton]}><Text style={styles.dineMatchJoinButtonText}>{dineMatchBusy ? 'Entrando...' : 'Entrar'}</Text></Pressable>
+              </View>
+            ) : null}
 
-        <Pressable accessibilityRole="button" accessibilityLabel="Encontrar o Dine Match" onPress={generateDineMatch} style={({ pressed }) => [styles.dineMatchGenerate, pressed && styles.activePress]}>
-          <Ionicons name="sparkles" size={19} color="#FFFFFF" />
-          <Text style={styles.dineMatchGenerateText}>Encontrar nosso Match</Text>
-        </Pressable>
+            <Text style={styles.dineMatchQuestion}>Qual é o clima?</Text>
+            <View style={styles.dineMatchOptionGrid}>
+              {occasions.map(([label, icon]) => {
+                const active = dineMatchDraft.occasion === label;
+                return (
+                  <Pressable key={label} onPress={() => updateDineMatchDraft({ occasion: label })} style={[styles.dineMatchOption, active && styles.dineMatchOptionActive]}>
+                    <Ionicons name={icon} size={19} color={active ? colors.redDark : colors.muted} />
+                    <Text style={[styles.dineMatchOptionText, active && styles.dineMatchOptionTextActive]}>{label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
 
-        {dineMatchResults.length ? (
+            <Text style={styles.dineMatchQuestion}>O que a turma toparia?</Text>
+            <Text style={styles.dineMatchHelper}>Pode escolher mais de uma cozinha.</Text>
+            <View style={styles.dineMatchChips}>
+              {cuisines.map((cuisine) => {
+                const active = dineMatchDraft.cuisines.includes(cuisine);
+                return <Pressable key={cuisine} onPress={() => toggleDineMatchCuisine(cuisine)} style={[styles.dineMatchChip, active && styles.dineMatchChipActive]}><Text style={[styles.dineMatchChipText, active && styles.dineMatchChipTextActive]}>{cuisine}</Text>{active ? <Ionicons name="checkmark" size={14} color="#FFFFFF" /> : null}</Pressable>;
+              })}
+            </View>
+
+            <View style={styles.dineMatchTwoColumns}>
+              <View style={styles.dineMatchColumn}>
+                <Text style={styles.dineMatchQuestion}>Orçamento</Text>
+                <View style={styles.dineMatchSegment}>{['$', '$$', '$$$', '$$$$'].map((price) => <Pressable key={price} onPress={() => updateDineMatchDraft({ budget: price })} style={[styles.dineMatchSegmentItem, dineMatchDraft.budget === price && styles.dineMatchSegmentItemActive]}><Text style={[styles.dineMatchSegmentText, dineMatchDraft.budget === price && styles.dineMatchSegmentTextActive]}>{price}</Text></Pressable>)}</View>
+              </View>
+              <View style={styles.dineMatchColumn}>
+                <Text style={styles.dineMatchQuestion}>Distância</Text>
+                <View style={styles.dineMatchSegment}>{[3, 5, 10].map((distance) => <Pressable key={distance} onPress={() => updateDineMatchDraft({ radius: distance })} style={[styles.dineMatchSegmentItem, dineMatchDraft.radius === distance && styles.dineMatchSegmentItemActive]}><Text style={[styles.dineMatchSegmentText, dineMatchDraft.radius === distance && styles.dineMatchSegmentTextActive]}>{distance} km</Text></Pressable>)}</View>
+              </View>
+            </View>
+
+            <Pressable accessibilityRole="button" accessibilityLabel="Encontrar o Dine Match" disabled={dineMatchBusy} onPress={createCollaborativeDineMatch} style={({ pressed }) => [styles.dineMatchGenerate, dineMatchBusy && styles.disabledButton, pressed && styles.activePress]}>
+              <Ionicons name="people" size={19} color="#FFFFFF" />
+              <Text style={styles.dineMatchGenerateText}>{dineMatchBusy ? 'Criando grupo...' : 'Criar grupo e encontrar Match'}</Text>
+            </Pressable>
+          </>
+        )}
+
+        {dineMatchFeedback ? <View style={styles.dineMatchFeedback}><Ionicons name="information-circle-outline" size={17} color={colors.redDark} /><Text style={styles.dineMatchFeedbackText}>{dineMatchFeedback}</Text></View> : null}
+
+        {rankedResults.length ? (
           <View style={styles.dineMatchResults}>
             <View style={styles.dineMatchResultHeading}>
-              <View><Text style={styles.dineMatchResultEyebrow}>RESULTADO DO GRUPO</Text><Text style={styles.dineMatchResultTitle}>Deu Match!</Text></View>
+              <View><Text style={styles.dineMatchResultEyebrow}>{dineMatchGroup?.status === 'active' ? 'Votação do grupo' : 'Resultado do grupo'}</Text><Text style={styles.dineMatchResultTitle}>Deu Match!</Text></View>
               <Ionicons name="sparkles" size={25} color={colors.ochre} />
             </View>
-            {dineMatchResults.map((restaurant, index) => (
-              <Pressable key={restaurant.id} accessibilityLabel={`Abrir ${restaurant.name}, ${restaurant.dineMatchScore}% de compatibilidade`} onPress={() => setSelectedRestaurant(restaurant)} style={[styles.dineMatchResultCard, index === 0 && styles.dineMatchResultCardWinner]}>
-                <Image source={imageSource(restaurant.coverPhoto || restaurant.image || restaurant.logo)} style={styles.dineMatchResultImage} />
-                {index === 0 ? <View style={styles.dineMatchWinnerBadge}><Ionicons name="trophy" size={11} color="#FFFFFF" /><Text style={styles.dineMatchWinnerBadgeText}>Melhor Match</Text></View> : null}
-                <View style={styles.dineMatchResultCopy}>
-                  <View style={styles.dineMatchResultNameRow}><Text numberOfLines={1} style={styles.dineMatchResultName}>{restaurant.name}</Text><Text style={styles.dineMatchPercent}>{restaurant.dineMatchScore}%</Text></View>
-                  <Text numberOfLines={1} style={styles.dineMatchResultMeta}>{restaurant.type} • {restaurant.price || '$$'} • {formatDistance(restaurant.distanceKm)}</Text>
-                  <View style={styles.dineMatchReasonRow}>{restaurant.dineMatchReasons.slice(0, 2).map((reason) => <View key={reason} style={styles.dineMatchReason}><Text style={styles.dineMatchReasonText}>{reason}</Text></View>)}</View>
+            {rankedResults.map((restaurant, index) => {
+              const summary = dineMatchVoteSummary(dineMatchGroup, restaurant.id);
+              const myVote = (dineMatchGroup?.votes || []).find((vote) => String(vote.userId) === String(currentUser?.id) && String(vote.restaurantId) === String(restaurant.id));
+              return (
+                <View key={restaurant.id} style={[styles.dineMatchCandidateWrap, index === 0 && dineMatchGroup && styles.dineMatchCandidateLeading]}>
+                  <Pressable accessibilityLabel={`Abrir ${restaurant.name}, ${restaurant.dineMatchScore}% de compatibilidade`} onPress={() => setSelectedRestaurant(restaurant)} style={[styles.dineMatchResultCard, index === 0 && styles.dineMatchResultCardWinner]}>
+                    <Image source={imageSource(restaurant.coverPhoto || restaurant.image || restaurant.logo)} style={styles.dineMatchResultImage} />
+                    {index === 0 ? <View style={styles.dineMatchWinnerBadge}><Ionicons name="trophy" size={11} color="#FFFFFF" /><Text style={styles.dineMatchWinnerBadgeText}>{dineMatchGroup ? 'Liderando' : 'Melhor Match'}</Text></View> : null}
+                    <View style={styles.dineMatchResultCopy}>
+                      <View style={styles.dineMatchResultNameRow}><Text numberOfLines={1} style={styles.dineMatchResultName}>{restaurant.name}</Text><Text style={styles.dineMatchPercent}>{restaurant.dineMatchScore}%</Text></View>
+                      <Text numberOfLines={1} style={styles.dineMatchResultMeta}>{restaurant.type} • {restaurant.price || '$$'} • {formatDistance(restaurant.distanceKm)}</Text>
+                      <View style={styles.dineMatchReasonRow}>{restaurant.dineMatchReasons.slice(0, 2).map((reason) => <View key={reason} style={styles.dineMatchReason}><Text style={styles.dineMatchReasonText}>{reason}</Text></View>)}</View>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+                  </Pressable>
+                  {dineMatchGroup ? (
+                    <View style={styles.dineMatchVoteBar}>
+                      <Text style={styles.dineMatchVoteScore}>{summary.score > 0 ? '+' : ''}{summary.score} pontos</Text>
+                      <View style={styles.dineMatchVoteActions}>
+                        <Pressable accessibilityRole="button" accessibilityLabel={`Não escolher ${restaurant.name}`} disabled={dineMatchGroup.status !== 'active'} onPress={() => voteOnDineMatch(restaurant.id, -1)} style={[styles.dineMatchVoteButton, myVote?.value === -1 && styles.dineMatchVoteButtonNo]}><Ionicons name={myVote?.value === -1 ? 'close-circle' : 'close-circle-outline'} size={18} color={myVote?.value === -1 ? '#FFFFFF' : colors.muted} /><Text style={[styles.dineMatchVoteText, myVote?.value === -1 && styles.dineMatchVoteTextActive]}>{summary.vetoes}</Text></Pressable>
+                        <Pressable accessibilityRole="button" accessibilityLabel={`Votar em ${restaurant.name}`} disabled={dineMatchGroup.status !== 'active'} onPress={() => voteOnDineMatch(restaurant.id, 1)} style={[styles.dineMatchVoteButton, myVote?.value === 1 && styles.dineMatchVoteButtonYes]}><Ionicons name={myVote?.value === 1 ? 'heart' : 'heart-outline'} size={18} color={myVote?.value === 1 ? '#FFFFFF' : colors.redDark} /><Text style={[styles.dineMatchVoteText, myVote?.value === 1 && styles.dineMatchVoteTextActive]}>{summary.likes}</Text></Pressable>
+                      </View>
+                    </View>
+                  ) : null}
                 </View>
-                <Ionicons name="chevron-forward" size={18} color={colors.muted} />
-              </Pressable>
-            ))}
+              );
+            })}
+            {dineMatchGroup && winner ? (
+              <View style={styles.dineMatchFinalActions}>
+                {isHost && dineMatchGroup.status === 'active' ? <Pressable accessibilityRole="button" accessibilityLabel="Encerrar votação do Dine Match" onPress={finishCollaborativeDineMatch} style={styles.dineMatchFinishButton}><Ionicons name="checkmark-done" size={18} color={colors.redDark} /><Text style={styles.dineMatchFinishButtonText}>Encerrar votação</Text></Pressable> : null}
+                <Pressable accessibilityRole="button" accessibilityLabel={`Reservar vencedor ${winner.name}`} onPress={() => openNativeReservation(winner)} style={styles.dineMatchReserveWinner}><Ionicons name="calendar" size={18} color="#FFFFFF" /><Text style={styles.dineMatchReserveWinnerText}>Reservar {winner.name}</Text></Pressable>
+              </View>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -11683,7 +11889,7 @@ const styles = StyleSheet.create({
   dineMatchGenerateText: { color: '#FFFFFF', fontFamily: 'Nunito_800ExtraBold', fontSize: 14 },
   dineMatchResults: { marginTop: 24, gap: 9 },
   dineMatchResultHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 },
-  dineMatchResultEyebrow: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 9, letterSpacing: 0.9 },
+  dineMatchResultEyebrow: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 9, letterSpacing: 0.9, textTransform: 'uppercase' },
   dineMatchResultTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 24, lineHeight: 28 },
   dineMatchResultCard: { minHeight: 92, borderRadius: 13, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', padding: 8, flexDirection: 'row', alignItems: 'center', gap: 9, overflow: 'hidden' },
   dineMatchResultCardWinner: { borderColor: 'rgba(241,61,11,0.45)', backgroundColor: '#FFF9F5' },
@@ -11698,6 +11904,45 @@ const styles = StyleSheet.create({
   dineMatchReasonRow: { flexDirection: 'row', gap: 4, marginTop: 3 },
   dineMatchReason: { minHeight: 20, maxWidth: '48%', borderRadius: 10, backgroundColor: '#FFF0E9', paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center' },
   dineMatchReasonText: { color: colors.redDark, fontFamily: 'Nunito_700Bold', fontSize: 7 },
+  dineMatchJoinShortcut: { width: 36, height: 36, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(241,61,11,0.22)', backgroundColor: '#FFF8F4', alignItems: 'center', justifyContent: 'center' },
+  dineMatchJoinCard: { marginTop: 9, borderRadius: 13, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', padding: 10, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  dineMatchJoinCopy: { flex: 1, minWidth: 0 },
+  dineMatchJoinTitle: { color: colors.ink, fontFamily: 'Nunito_800ExtraBold', fontSize: 12 },
+  dineMatchJoinText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9, marginTop: 1 },
+  dineMatchJoinInput: { width: 76, height: 38, borderRadius: 9, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.bg, paddingHorizontal: 8, color: colors.ink, textAlign: 'center', fontFamily: 'Nunito_800ExtraBold', fontSize: 12, letterSpacing: 1 },
+  dineMatchJoinButton: { minWidth: 58, height: 38, borderRadius: 9, backgroundColor: colors.redDark, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+  dineMatchJoinButtonText: { color: '#FFFFFF', fontFamily: 'Nunito_800ExtraBold', fontSize: 10 },
+  dineMatchLiveGroup: { marginTop: 14, borderRadius: 15, borderWidth: 1, borderColor: 'rgba(241,61,11,0.2)', backgroundColor: '#FFF8F4', padding: 11, gap: 10 },
+  dineMatchLiveTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  dineMatchCodeBadge: { minWidth: 62, borderRadius: 9, borderWidth: 1, borderColor: 'rgba(241,61,11,0.18)', backgroundColor: '#FFFFFF', paddingHorizontal: 7, paddingVertical: 4, alignItems: 'center' },
+  dineMatchCodeLabel: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 6, letterSpacing: 0.8 },
+  dineMatchCodeValue: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 12, letterSpacing: 1 },
+  dineMatchParticipants: { alignItems: 'center', gap: 9, paddingRight: 8 },
+  dineMatchParticipant: { width: 48, alignItems: 'center', gap: 3 },
+  dineMatchParticipantAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: colors.ink, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#FFFFFF' },
+  dineMatchParticipantInitial: { color: '#FFFFFF', fontFamily: 'Nunito_800ExtraBold', fontSize: 12 },
+  dineMatchParticipantName: { width: 48, color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 7, textAlign: 'center' },
+  dineMatchParticipantAdd: { minHeight: 34, borderRadius: 17, borderWidth: 1, borderStyle: 'dashed', borderColor: 'rgba(241,61,11,0.36)', paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 3 },
+  dineMatchParticipantAddText: { color: colors.redDark, fontFamily: 'Nunito_700Bold', fontSize: 8 },
+  dineMatchLeaveGroup: { minHeight: 30, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 4 },
+  dineMatchLeaveGroupText: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 8 },
+  dineMatchFeedback: { marginTop: 10, borderRadius: 10, backgroundColor: '#FFF1EA', padding: 9, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dineMatchFeedbackText: { flex: 1, color: colors.redDark, fontFamily: 'Nunito_700Bold', fontSize: 9, lineHeight: 13 },
+  dineMatchCandidateWrap: { borderRadius: 14, gap: 0 },
+  dineMatchCandidateLeading: { shadowColor: colors.redDark, shadowOpacity: 0.1, shadowRadius: 10, elevation: 2 },
+  dineMatchVoteBar: { minHeight: 43, marginTop: -3, borderBottomLeftRadius: 13, borderBottomRightRadius: 13, borderWidth: 1, borderTopWidth: 0, borderColor: colors.line, backgroundColor: '#FFFFFF', paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dineMatchVoteScore: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 9 },
+  dineMatchVoteActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dineMatchVoteButton: { minWidth: 52, height: 30, borderRadius: 15, borderWidth: 1, borderColor: colors.line, backgroundColor: '#FFFFFF', paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  dineMatchVoteButtonNo: { backgroundColor: '#706B66', borderColor: '#706B66' },
+  dineMatchVoteButtonYes: { backgroundColor: colors.redDark, borderColor: colors.redDark },
+  dineMatchVoteText: { color: colors.muted, fontFamily: 'Nunito_800ExtraBold', fontSize: 9 },
+  dineMatchVoteTextActive: { color: '#FFFFFF' },
+  dineMatchFinalActions: { marginTop: 8, gap: 8 },
+  dineMatchFinishButton: { minHeight: 44, borderRadius: 11, borderWidth: 1, borderColor: 'rgba(241,61,11,0.3)', backgroundColor: '#FFF8F4', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  dineMatchFinishButtonText: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 11 },
+  dineMatchReserveWinner: { minHeight: 50, borderRadius: 12, backgroundColor: colors.ink, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 14 },
+  dineMatchReserveWinnerText: { color: '#FFFFFF', fontFamily: 'Nunito_800ExtraBold', fontSize: 12 },
   socialFeedPage: { backgroundColor: colors.card },
   socialFeedHeader: { paddingHorizontal: 16, paddingTop: 4, borderBottomWidth: 1, borderBottomColor: colors.softLine },
   socialFeedTopBar: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
