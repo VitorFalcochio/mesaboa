@@ -37,6 +37,39 @@ test('keeps external places map-only and clearly distinct from Dine partners', a
   expect(pageErrors).toEqual([]);
 });
 
+test('zooms the web map with a two-finger pinch gesture', async ({ page }) => {
+  await createUserAccount(page);
+  await page.getByRole('tab', { name: 'Ir para Mapa' }).click();
+
+  const gestureLayer = page.getByTestId('partner-map-gesture-layer');
+  await expect(gestureLayer).toBeVisible();
+  const initialTileUrl = await gestureLayer.locator('img').first().getAttribute('src');
+  await gestureLayer.evaluate((element) => {
+    const dispatchTouches = (type, points) => {
+      const touches = points.map(({ id, x, y }) => new Touch({
+        identifier: id,
+        target: element,
+        clientX: x,
+        clientY: y,
+        pageX: x,
+        pageY: y
+      }));
+      element.dispatchEvent(new TouchEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        touches,
+        targetTouches: touches,
+        changedTouches: touches
+      }));
+    };
+    dispatchTouches('touchstart', [{ id: 1, x: 120, y: 180 }, { id: 2, x: 190, y: 180 }]);
+    dispatchTouches('touchmove', [{ id: 1, x: 35, y: 180 }, { id: 2, x: 275, y: 180 }]);
+    dispatchTouches('touchend', []);
+  });
+
+  await expect.poll(async () => gestureLayer.locator('img').first().getAttribute('src')).not.toBe(initialTileUrl);
+});
+
 test('collects verified business data before sending a restaurant claim', async ({ page }) => {
   const pageErrors = [];
   const dialogs = [];
