@@ -1600,6 +1600,7 @@ export default function App() {
   const { width } = useWindowDimensions();
   const systemColorScheme = useColorScheme();
   const compact = width < 380;
+  const homeDiscoveryCardWidth = Math.max(280, Math.min(width, 720) - 36);
   const screenFade = useRef(new Animated.Value(1)).current;
   const startupSplashOpacity = useRef(new Animated.Value(1)).current;
   const startupLogoScale = useRef(new Animated.Value(0.82)).current;
@@ -1607,6 +1608,10 @@ export default function App() {
   const startupPulse = useRef(new Animated.Value(0)).current;
   const homeDiscoveryAnim = useRef(new Animated.Value(1)).current;
   const homeDiscoverySheen = useRef(new Animated.Value(0)).current;
+  const homeDiscoveryScrollRef = useRef(null);
+  const homeDiscoveryProgrammaticRef = useRef(false);
+  const homeDiscoveryProgrammaticTimerRef = useRef(null);
+  const homeDiscoveryManualInteractionRef = useRef(0);
   const mainScrollRef = useRef(null);
   const demoRestaurantSeededRef = useRef(false);
   const favoritesMutationRef = useRef(0);
@@ -1753,6 +1758,7 @@ export default function App() {
 
   useEffect(() => {
     const timer = setInterval(() => {
+      if (Date.now() - homeDiscoveryManualInteractionRef.current < 6000) return;
       setHomeDiscoveryIndex((index) => index + 1);
     }, 4000);
     return () => clearInterval(timer);
@@ -2281,7 +2287,22 @@ export default function App() {
         useNativeDriver: true
       })
     ]).start();
-  }, [homeDiscoveryAnim, homeDiscoveryIndex, homeDiscoverySheen]);
+  }, [homeDiscoveryAnim, homeDiscoverySheen]);
+
+  useEffect(() => {
+    if (!homeDiscoveryScrollRef.current) return;
+    const index = homeDiscoveryIndex % discoveryCampaigns.length;
+    homeDiscoveryProgrammaticRef.current = true;
+    clearTimeout(homeDiscoveryProgrammaticTimerRef.current);
+    homeDiscoveryScrollRef.current.scrollTo({
+      x: index * homeDiscoveryCardWidth,
+      animated: true
+    });
+    homeDiscoveryProgrammaticTimerRef.current = setTimeout(() => {
+      homeDiscoveryProgrammaticRef.current = false;
+    }, 650);
+    return () => clearTimeout(homeDiscoveryProgrammaticTimerRef.current);
+  }, [homeDiscoveryCardWidth, homeDiscoveryIndex]);
 
   function requireLogin(action) {
     if (currentUser) return true;
@@ -4258,7 +4279,6 @@ function postKey(restaurantId, postId) {
       ['Brasileira', 'brasileir', discoveryCategoryAssets.brasileira],
       ['Cafés', 'caf', discoveryCategoryAssets.cafes]
     ];
-    const featuredCampaign = discoveryCampaigns[homeDiscoveryIndex % discoveryCampaigns.length];
     const nearbyRestaurants = topRestaurants.slice(0, 5);
     const newRestaurants = [...publicRestaurants]
       .sort((a, b) => Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0))
@@ -4332,38 +4352,78 @@ function postKey(restaurantId, postId) {
             }
           ]}
         >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Abrir destaque ${featuredCampaign.title}`}
-            onPress={() => navigateTo('results', { title: featuredCampaign.destinationTitle })}
-            style={({ pressed }) => [styles.discoveryCampaignCard, pressed && styles.pressed]}
+          <ScrollView
+            ref={homeDiscoveryScrollRef}
+            horizontal
+            pagingEnabled
+            snapToInterval={homeDiscoveryCardWidth}
+            decelerationRate="fast"
+            accessibilityLabel="Destaques do Dine"
+            showsHorizontalScrollIndicator={false}
+            scrollEventThrottle={16}
+            onScrollBeginDrag={() => {
+              homeDiscoveryManualInteractionRef.current = Date.now();
+              homeDiscoveryProgrammaticRef.current = false;
+              clearTimeout(homeDiscoveryProgrammaticTimerRef.current);
+            }}
+            onScroll={(event) => {
+              if (homeDiscoveryProgrammaticRef.current) return;
+              homeDiscoveryManualInteractionRef.current = Date.now();
+              const pageWidth = event.nativeEvent.layoutMeasurement?.width || homeDiscoveryCardWidth;
+              const rawIndex = event.nativeEvent.contentOffset.x / Math.max(1, pageWidth);
+              const nextIndex = Math.max(0, Math.min(discoveryCampaigns.length - 1, Math.round(rawIndex)));
+              setHomeDiscoveryIndex((current) => current % discoveryCampaigns.length === nextIndex ? current : nextIndex);
+            }}
+            onScrollEndDrag={() => {
+              homeDiscoveryManualInteractionRef.current = Date.now();
+              homeDiscoveryProgrammaticRef.current = false;
+            }}
+            onMomentumScrollEnd={(event) => {
+              homeDiscoveryManualInteractionRef.current = Date.now();
+              homeDiscoveryProgrammaticRef.current = false;
+              const pageWidth = event.nativeEvent.layoutMeasurement?.width || homeDiscoveryCardWidth;
+              const rawIndex = event.nativeEvent.contentOffset.x / Math.max(1, pageWidth);
+              const nextIndex = Math.max(0, Math.min(discoveryCampaigns.length - 1, Math.round(rawIndex)));
+              setHomeDiscoveryIndex((current) => current % discoveryCampaigns.length === nextIndex ? current : nextIndex);
+            }}
+            style={styles.discoveryCampaignPager}
           >
-            <Image source={featuredCampaign.image} resizeMode="cover" style={styles.discoveryCampaignImage} />
-            <View style={styles.discoveryCampaignScrim} />
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.discoveryCampaignSheen,
-                {
-                  transform: [{
-                    translateX: homeDiscoverySheen.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [-120, Math.max(width, 420)]
-                    })
-                  }]
-                }
-              ]}
-            />
-            <View style={styles.discoveryCampaignCopy}>
-              <Text style={styles.discoveryCampaignEyebrow}>{featuredCampaign.eyebrow}</Text>
-              <Text numberOfLines={3} style={styles.discoveryCampaignTitle}>{featuredCampaign.title}</Text>
-              <Text numberOfLines={2} style={styles.discoveryCampaignText}>{featuredCampaign.text}</Text>
-              <View style={styles.discoveryCampaignCta}>
-                <Text style={styles.discoveryCampaignCtaText}>{featuredCampaign.cta}</Text>
-                <Ionicons name="arrow-forward" size={14} color={colors.redDark} />
-              </View>
-            </View>
-          </Pressable>
+            {discoveryCampaigns.map((campaign) => (
+              <Pressable
+                key={campaign.id}
+                accessibilityRole="button"
+                accessibilityLabel={`Abrir destaque ${campaign.title}`}
+                onPress={() => navigateTo('results', { title: campaign.destinationTitle })}
+                style={({ pressed }) => [styles.discoveryCampaignCard, { width: homeDiscoveryCardWidth }, pressed && styles.pressed]}
+              >
+                <Image source={campaign.image} resizeMode="cover" style={styles.discoveryCampaignImage} />
+                <View style={styles.discoveryCampaignScrim} />
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    styles.discoveryCampaignSheen,
+                    {
+                      transform: [{
+                        translateX: homeDiscoverySheen.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [-120, Math.max(width, 420)]
+                        })
+                      }]
+                    }
+                  ]}
+                />
+                <View style={styles.discoveryCampaignCopy}>
+                  <Text style={styles.discoveryCampaignEyebrow}>{campaign.eyebrow}</Text>
+                  <Text numberOfLines={3} style={styles.discoveryCampaignTitle}>{campaign.title}</Text>
+                  <Text numberOfLines={2} style={styles.discoveryCampaignText}>{campaign.text}</Text>
+                  <View style={styles.discoveryCampaignCta}>
+                    <Text style={styles.discoveryCampaignCtaText}>{campaign.cta}</Text>
+                    <Ionicons name="arrow-forward" size={14} color={colors.redDark} />
+                  </View>
+                </View>
+              </Pressable>
+            ))}
+          </ScrollView>
           <View style={styles.discoveryCampaignDots}>
             {discoveryCampaigns.map((campaign, index) => {
               const active = index === homeDiscoveryIndex % discoveryCampaigns.length;
@@ -4371,8 +4431,14 @@ function postKey(restaurantId, postId) {
                 <Pressable
                   key={campaign.id}
                   accessibilityRole="button"
-                  accessibilityLabel={`Mostrar destaque ${index + 1} de ${discoveryCampaigns.length}`}
-                  onPress={() => setHomeDiscoveryIndex(index)}
+                  accessibilityLabel={active
+                    ? `Destaque atual ${index + 1} de ${discoveryCampaigns.length}`
+                    : `Mostrar destaque ${index + 1} de ${discoveryCampaigns.length}`}
+                  accessibilityState={{ selected: active }}
+                  onPress={() => {
+                    homeDiscoveryManualInteractionRef.current = Date.now();
+                    setHomeDiscoveryIndex(index);
+                  }}
                   hitSlop={8}
                   style={[styles.discoveryCampaignDot, active && styles.discoveryCampaignDotActive]}
                 />
@@ -4575,7 +4641,7 @@ function postKey(restaurantId, postId) {
     const reposts = Number(post.reposts || 0) + (state.reposted ? 1 : 0);
     const images = (post.images?.length ? post.images : [post.image]).filter(Boolean).slice(0, 4);
     const imageSize = Math.max(280, Math.min(width, 560));
-    const activePhoto = feedPhotoIndexes[post.id] || 0;
+    const activePhoto = Math.max(0, Math.min(images.length - 1, feedPhotoIndexes[post.id] || 0));
     const authorAvatar = postAuthorAvatar(post, currentUser);
     const authorInitials = initialsForName(post.author, 'D');
     return (
@@ -4610,10 +4676,26 @@ function postKey(restaurantId, postId) {
           <ScrollView
             horizontal
             pagingEnabled
+            snapToInterval={imageSize}
+            decelerationRate="fast"
+            accessibilityLabel={`Galeria de ${post.author}, ${images.length} fotos`}
             showsHorizontalScrollIndicator={false}
+            scrollEventThrottle={16}
+            onScroll={(event) => {
+              const pageWidth = event.nativeEvent.layoutMeasurement?.width || imageSize;
+              const rawIndex = event.nativeEvent.contentOffset.x / Math.max(1, pageWidth);
+              const nextIndex = Math.max(0, Math.min(images.length - 1, Math.round(rawIndex)));
+              setFeedPhotoIndexes((current) => current[post.id] === nextIndex
+                ? current
+                : { ...current, [post.id]: nextIndex });
+            }}
             onMomentumScrollEnd={(event) => {
-              const nextIndex = Math.round(event.nativeEvent.contentOffset.x / imageSize);
-              setFeedPhotoIndexes((current) => ({ ...current, [post.id]: nextIndex }));
+              const pageWidth = event.nativeEvent.layoutMeasurement?.width || imageSize;
+              const rawIndex = event.nativeEvent.contentOffset.x / Math.max(1, pageWidth);
+              const nextIndex = Math.max(0, Math.min(images.length - 1, Math.round(rawIndex)));
+              setFeedPhotoIndexes((current) => current[post.id] === nextIndex
+                ? current
+                : { ...current, [post.id]: nextIndex });
             }}
           >
             {images.map((photo, index) => (
@@ -10632,6 +10714,7 @@ const styles = StyleSheet.create({
   discoveryCategoryImage: { width: 60, height: 60, borderRadius: 8, backgroundColor: colors.surface },
   discoveryCategoryLabel: { color: colors.ink, fontFamily: 'Nunito_700Bold', fontSize: 11, textAlign: 'center' },
   discoveryCampaignEntrance: { position: 'relative', paddingBottom: 19 },
+  discoveryCampaignPager: { width: '100%', borderRadius: 16, overflow: 'hidden' },
   discoveryCampaignCard: { height: 246, borderRadius: 16, overflow: 'hidden', backgroundColor: colors.redDark, shadowColor: colors.ink, shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: 7 }, elevation: 5 },
   discoveryCampaignImage: { width: '100%', height: '100%' },
   discoveryCampaignScrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,7,3,0.08)' },
