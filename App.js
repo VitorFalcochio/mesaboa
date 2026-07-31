@@ -103,7 +103,8 @@ import {
   seedRestaurantLegacyNames,
   seedRestaurants,
   seedUsers,
-  tabs
+  tabs,
+  weeklyMissionRules
 } from './src/data/appData';
 import externalPlacesSeed from './src/data/externalPlacesSeed.json';
 import {
@@ -420,6 +421,7 @@ const mascotAssets = {
   smartSearch: require('./Designer/Mascote/mascote-busca-inteligente.png'),
   mapFound: require('./Designer/Mascote/mascote-mapa-encontrado.png'),
   achievement: require('./Designer/Mascote/mascote-conquista.png'),
+  journeyTrophy: require('./Designer/Mascote/mascote-jornada-trofeu.png'),
   emptyState: require('./Designer/Mascote/mascote-estado-vazio.png')
 };
 const discoveryCategoryAssets = {
@@ -660,9 +662,11 @@ function scoreValue(item) {
 function defaultGamification() {
   return {
     points: 0,
-    metrics: { favorites: 0, maps: 0, reviews: 0, known: 0, likesGiven: 0, commentLikes: 0, invites: 0, collections: 0 },
-    awarded: { favorites: [], maps: [], reviews: [], known: [], likes: [], collections: [], invites: [] },
-    achievements: []
+    metrics: { favorites: 0, maps: 0, reviews: 0, known: 0, likesGiven: 0, commentLikes: 0, invites: 0, collections: 0, reservations: 0, posts: 0 },
+    awarded: { favorites: [], maps: [], reviews: [], known: [], likes: [], collections: [], invites: [], reservations: [], posts: [] },
+    achievements: [],
+    history: [],
+    weekly: { key: '', completed: [] }
   };
 }
 
@@ -671,9 +675,12 @@ function mergeGamification(value) {
   return {
     ...base,
     ...(value || {}),
+    points: Math.max(0, Number(value?.points || 0)),
     metrics: { ...base.metrics, ...(value?.metrics || {}) },
     awarded: { ...base.awarded, ...(value?.awarded || {}) },
-    achievements: value?.achievements || []
+    achievements: value?.achievements || [],
+    history: Array.isArray(value?.history) ? value.history.slice(0, 120) : [],
+    weekly: { ...base.weekly, ...(value?.weekly || {}), completed: value?.weekly?.completed || [] }
   };
 }
 
@@ -691,14 +698,128 @@ function earnedAchievements(gamification) {
 }
 
 const gamificationEvents = {
-  favorite: { awarded: 'favorites', metric: 'favorites' },
-  map: { awarded: 'maps', metric: 'maps' },
-  review: { awarded: 'reviews', metric: 'reviews' },
-  known: { awarded: 'known', metric: 'known' },
-  like: { awarded: 'likes', metric: 'likesGiven' },
-  collection: { awarded: 'collections', metric: 'collections' },
-  invite: { awarded: 'invites', metric: 'invites' }
+  favorite: { awarded: 'favorites', metric: 'favorites', label: 'Restaurante salvo', icon: 'heart' },
+  map: { awarded: 'maps', metric: 'maps', label: 'Rota aberta', icon: 'navigate' },
+  review: { awarded: 'reviews', metric: 'reviews', label: 'Avaliação publicada', icon: 'star' },
+  known: { awarded: 'known', metric: 'known', label: 'Visita registrada', icon: 'location' },
+  like: { awarded: 'likes', metric: 'likesGiven', label: 'Interação na comunidade', icon: 'heart-outline' },
+  collection: { awarded: 'collections', metric: 'collections', label: 'Coleção criada', icon: 'albums-outline' },
+  invite: { awarded: 'invites', metric: 'invites', label: 'Convite compartilhado', icon: 'people' },
+  reservation: { awarded: 'reservations', metric: 'reservations', label: 'Reserva realizada', icon: 'calendar' },
+  post: { awarded: 'posts', metric: 'posts', label: 'Publicação criada', icon: 'camera' }
 };
+
+function journeyWeek(date = new Date()) {
+  const value = new Date(date);
+  const day = value.getDay() || 7;
+  value.setHours(0, 0, 0, 0);
+  value.setDate(value.getDate() - day + 1);
+  const start = new Date(value);
+  const end = new Date(value);
+  end.setDate(end.getDate() + 7);
+  return {
+    key: start.toISOString().slice(0, 10),
+    startMs: start.getTime(),
+    endMs: end.getTime(),
+    endLabel: end.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })
+  };
+}
+
+function weeklyMissionProgress(gamification, mission, week = journeyWeek()) {
+  return (gamification.history || []).filter((entry) => (
+    entry.type === mission.event
+    && Number(new Date(entry.createdAt)) >= week.startMs
+    && Number(new Date(entry.createdAt)) < week.endMs
+  )).length;
+}
+
+function applyJourneyEvents(value, events, now = new Date()) {
+  const gamification = mergeGamification(value);
+  const week = journeyWeek(now);
+  const previousRank = rankForPoints(gamification.points).current;
+  const previousAchievements = new Set(gamification.achievements || []);
+  const weeklyCompleted = gamification.weekly?.key === week.key ? [...(gamification.weekly.completed || [])] : [];
+  const next = {
+    ...gamification,
+    metrics: { ...gamification.metrics },
+    awarded: { ...gamification.awarded },
+    history: [...(gamification.history || [])],
+    weekly: { key: week.key, completed: weeklyCompleted }
+  };
+  let actionPoints = 0;
+  let awarded = false;
+
+  events.forEach((eventInput, index) => {
+    const event = gamificationEvents[eventInput.type];
+    const amount = Number(eventInput.amount ?? pointRewards[eventInput.type] ?? 0);
+    if (!event || !amount) return;
+    const targetId = String(eventInput.targetId || '').trim();
+    const awardedList = next.awarded[event.awarded] || [];
+    if (targetId && awardedList.includes(targetId)) return;
+    awarded = true;
+    actionPoints += amount;
+    next.points += amount;
+    next.metrics[event.metric] = Number(next.metrics[event.metric] || 0) + 1;
+    next.awarded[event.awarded] = targetId ? [targetId, ...awardedList] : awardedList;
+    next.history.unshift({
+      id: `journey-${now.getTime()}-${index}-${eventInput.type}`,
+      type: eventInput.type,
+      label: event.label,
+      detail: String(eventInput.detail || '').trim(),
+      points: amount,
+      icon: event.icon,
+      createdAt: now.toISOString()
+    });
+  });
+
+  if (!awarded) return { awarded: false, gamification, actionPoints: 0, missionPoints: 0, completedMissions: [], newAchievements: [], levelUp: null };
+
+  const completedMissions = [];
+  let missionPoints = 0;
+  weeklyMissionRules.forEach((mission, index) => {
+    const progress = weeklyMissionProgress(next, mission, week);
+    if (progress < mission.goal || next.weekly.completed.includes(mission.id)) return;
+    next.weekly.completed.push(mission.id);
+    missionPoints += mission.reward;
+    next.points += mission.reward;
+    completedMissions.push(mission);
+    next.history.unshift({
+      id: `journey-${now.getTime()}-mission-${index}`,
+      type: 'mission',
+      label: `Missão concluída: ${mission.title}`,
+      detail: 'Bônus semanal',
+      points: mission.reward,
+      icon: 'checkmark-circle',
+      createdAt: now.toISOString()
+    });
+  });
+
+  const achievements = earnedAchievements(next);
+  const newAchievements = achievements.filter((item) => !previousAchievements.has(item.id));
+  next.achievements = [...new Set([...(next.achievements || []), ...achievements.map((item) => item.id)])];
+  newAchievements.forEach((achievement, index) => {
+    next.history.unshift({
+      id: `journey-${now.getTime()}-achievement-${index}`,
+      type: 'achievement',
+      label: `Conquista: ${achievement.name}`,
+      detail: achievement.description,
+      points: 0,
+      icon: 'ribbon',
+      createdAt: now.toISOString()
+    });
+  });
+  next.history = next.history.slice(0, 120);
+  const currentRank = rankForPoints(next.points).current;
+  return {
+    awarded: true,
+    gamification: next,
+    actionPoints,
+    missionPoints,
+    completedMissions,
+    newAchievements,
+    levelUp: currentRank.name !== previousRank.name ? currentRank : null
+  };
+}
 
 function AppButton({ children, kind = 'primary', onPress, style, disabled = false }) {
   return (
@@ -2747,17 +2868,17 @@ export default function App() {
     if (addingFavorite) {
       setActionCelebration({
         id: `${name}-${Date.now()}`,
-        eyebrow: '+10 pontos',
+        eyebrow: `+${pointRewards.favorite} pontos`,
         title: 'Boa escolha!',
         text: `${name} foi salvo.`,
         icon: 'heart',
         mascot: mascotAssets.thumbsUp,
         accessibilityLabel: 'Mascote Dine comemorando o favorito'
       });
+      awardPoints('favorite', name, pointRewards.favorite, name);
     }
     setFavorites((items) => {
       const exists = items.includes(name);
-      if (!exists) awardPoints('favorite', name);
       return exists ? items.filter((item) => item !== name) : [name, ...items];
     });
   }
@@ -3149,16 +3270,19 @@ export default function App() {
     setFeedPhotoIndexes((current) => ({ ...current, [post.id]: 0 }));
     setFeedComposerOpen(false);
     setTab('Feed');
-    if (feedDraft.checkIn && restaurant.id) awardPoints('known', restaurant.id);
     setActionCelebration({
       id: `publish-${post.id}-${Date.now()}`,
-      eyebrow: feedDraft.checkIn ? '+8 pontos' : 'No ar',
+      eyebrow: `+${pointRewards.post + (feedDraft.checkIn ? pointRewards.known : 0)} pontos`,
       title: 'Post publicado',
       text: `${restaurant.name} entrou no seu feed.`,
       icon: 'sparkles',
       mascot: mascotAssets.thumbsUp,
       accessibilityLabel: 'Mascote Dine comemorando a publicação'
     });
+    awardJourneyEvents([
+      { type: 'post', targetId: post.id, detail: restaurant.name },
+      ...(feedDraft.checkIn && restaurant.id ? [{ type: 'known', targetId: restaurant.id, detail: restaurant.name }] : [])
+    ]);
     createFeedPostInDb(post, currentUser || { id: 'visitor-feed', name: 'Visitante' }).catch(() => {});
   }
 
@@ -3537,25 +3661,9 @@ export default function App() {
       const remoteInvite = await createInviteLinkInDb(currentUser);
       if (remoteInvite) invite = { ...invite, ...remoteInvite };
     } catch (error) {}
-    const gamification = mergeGamification(currentUser.gamification);
-    const alreadyAwarded = (gamification.awarded.invites || []).includes(String(invite.code));
-    const nextGamification = alreadyAwarded ? gamification : {
-      ...gamification,
-      points: gamification.points + (pointRewards.invite || 0),
-      metrics: {
-        ...gamification.metrics,
-        invites: (gamification.metrics.invites || 0) + 1
-      },
-      awarded: {
-        ...gamification.awarded,
-        invites: [String(invite.code), ...(gamification.awarded.invites || [])]
-      }
-    };
-    if (!alreadyAwarded) {
-      const achievements = earnedAchievements(nextGamification).map((item) => item.id);
-      nextGamification.achievements = [...new Set([...(nextGamification.achievements || []), ...achievements])];
-    }
-    await saveCurrentUser({ ...currentUser, invite, gamification: nextGamification });
+    awardJourneyEvents([
+      { type: 'invite', targetId: invite.code, detail: 'Link de convite do Dine' }
+    ], { ...currentUser, invite });
     if (!invite.link) {
       Alert.alert('Convites', 'Configure EXPO_PUBLIC_APP_URL para compartilhar links de convite no aplicativo nativo.');
       return;
@@ -3718,36 +3826,38 @@ export default function App() {
     updateCurrentUserProfile({ preferences: uniquePreferences });
   }
 
-  function awardPoints(type, targetId, amount = pointRewards[type] || 0) {
-    if (!currentUser || !amount) return false;
-    const event = gamificationEvents[type];
-    if (!event) return false;
-    const gamification = mergeGamification(currentUser.gamification);
-    const awardedKey = event.awarded;
-    const awardedList = gamification.awarded[awardedKey] || [];
-    if (targetId && awardedList.includes(String(targetId))) return false;
+  function announceJourneyProgress(result) {
+    const level = result.levelUp;
+    const mission = result.completedMissions?.[0];
+    const achievement = result.newAchievements?.[0];
+    if (!level && !mission && !achievement) return;
+    const celebration = level
+      ? { eyebrow: 'Novo nível', title: level.name, text: level.benefit, icon: 'trophy' }
+      : mission
+        ? { eyebrow: `+${mission.reward} pontos`, title: 'Missão concluída!', text: mission.title, icon: 'checkmark-circle' }
+        : { eyebrow: 'Nova conquista', title: achievement.name, text: achievement.description, icon: 'ribbon' };
+    setActionCelebration({
+      id: `journey-${Date.now()}`,
+      ...celebration,
+      mascot: mascotAssets.achievement,
+      accessibilityLabel: `Mascote Dine comemorando ${celebration.title.toLowerCase()}`
+    });
+  }
 
-    const nextGamification = {
-      ...gamification,
-      points: gamification.points + amount,
-      metrics: {
-        ...gamification.metrics,
-        [event.metric]: (gamification.metrics[event.metric] || 0) + 1
-      },
-      awarded: {
-        ...gamification.awarded,
-        [awardedKey]: targetId ? [String(targetId), ...awardedList] : awardedList
-      }
-    };
-    const achievements = earnedAchievements(nextGamification).map((item) => item.id);
-    nextGamification.achievements = [...new Set([...(nextGamification.achievements || []), ...achievements])];
-
-    const nextUser = { ...currentUser, gamification: nextGamification };
+  function awardJourneyEvents(events, baseUser = currentUser) {
+    if (!baseUser) return { awarded: false };
+    const result = applyJourneyEvents(baseUser.gamification, events);
+    const nextUser = { ...baseUser, gamification: result.gamification };
     setCurrentUser(nextUser);
-    setUsers((items) => items.map((user) => (user.id === nextUser.id ? { ...user, gamification: nextGamification } : user)));
+    setUsers((items) => items.map((user) => (user.id === nextUser.id ? { ...user, ...nextUser } : user)));
     AsyncStorage.setItem(storageKeys.currentUser, JSON.stringify(nextUser)).catch(() => {});
     saveUserProfileToDb(nextUser).catch(() => {});
-    return true;
+    if (result.awarded) announceJourneyProgress(result);
+    return result;
+  }
+
+  function awardPoints(type, targetId, amount = pointRewards[type] || 0, detail = '') {
+    return Boolean(awardJourneyEvents([{ type, targetId, amount, detail }]).awarded);
   }
 
   async function logout() {
@@ -4030,7 +4140,7 @@ export default function App() {
 
   function openMaps(item) {
     if (!item?.isExternal) {
-      awardPoints('map', item.id);
+      awardPoints('map', item.id, pointRewards.map, item.name);
       recordRestaurantMetricInDb(item.id, 'mapsClicks').catch(() => {});
     }
     const latitude = Number(item?.coordinate?.latitude ?? item?.latitude);
@@ -4149,6 +4259,7 @@ export default function App() {
         reservation: confirmedReservation,
         restaurant: item
       });
+      awardPoints('reservation', confirmedReservation.id, pointRewards.reservation, item.name);
       return true;
     } catch (error) {
       const unavailable = /SLOT_FULL|lotado|capacity/i.test(error?.message || '');
@@ -4537,7 +4648,7 @@ export default function App() {
     setRestaurants((items) => items.map((restaurant) => (
       restaurant.id === item.id ? { ...restaurant, rating: Number(nextRating.toFixed(1)), reviews: nextReviews.length } : restaurant
     )));
-    awardPoints('review', item.id);
+    awardPoints('review', item.id, pointRewards.review, item.name);
     setReviewDraft({ rating: '5', comment: '' });
     saveReviewToDb(review).catch(() => Alert.alert('Supabase', 'Comentário salvo localmente, mas não sincronizou agora.'));
     updateRestaurantInDb(item.id, { rating: Number(nextRating.toFixed(1)), reviews: nextReviews.length }).catch(() => {});
@@ -4547,7 +4658,7 @@ export default function App() {
     if (!currentUser && !requireLogin({ type: 'tab', target: 'Perfil' })) return;
     const likedBy = review.likedBy || [];
     const liked = likedBy.includes(currentUser.id);
-    if (!liked) awardPoints('like', review.id);
+    if (!liked) awardPoints('like', review.id, pointRewards.like, review.restaurantName || 'Avaliação da comunidade');
     const updated = {
       ...review,
       likedBy: liked ? likedBy.filter((id) => id !== currentUser.id) : [currentUser.id, ...likedBy],
@@ -4594,7 +4705,7 @@ export default function App() {
 
 function markRestaurantKnown(item) {
     if (!currentUser && !requireLogin({ type: 'tab', target: 'Perfil' })) return;
-    const awarded = awardPoints('known', item.id);
+    const awarded = awardPoints('known', item.id, pointRewards.known, item.name);
     Alert.alert(awarded ? 'Boa!' : 'Já estava no seu roteiro', awarded ? `Você ganhou ${pointRewards.known} pontos por conhecer ${item.name}.` : 'Esse restaurante já contou pontos para seu perfil.');
   }
 
@@ -6123,10 +6234,10 @@ function postKey(restaurantId, postId) {
 
         <View style={styles.dineProfileStatsCard}>
           {[
-            ['star-outline', String(gamification.metrics.reviews || 128), 'Avaliações'],
-            ['heart', String(favorites.length || 87), 'Favoritos'],
-            ['map-outline', String(gamification.metrics.known || 56), 'Lugares\nconhecidos'],
-            ['trophy-outline', formatCompactCount(gamification.points || 2450), 'Pontos']
+            ['star-outline', String(gamification.metrics.reviews || 0), 'Avaliações'],
+            ['heart', String(favorites.length), 'Favoritos'],
+            ['map-outline', String(gamification.metrics.known || 0), 'Lugares\nconhecidos'],
+            ['trophy-outline', formatCompactCount(gamification.points), 'Pontos']
           ].map(([icon, value, label], index) => (
             <View key={label} style={[styles.dineProfileStatItem, index > 0 && styles.dineProfileStatDivider]}>
               <Ionicons name={icon} size={28} color={index === 1 ? colors.redDark : colors.ochre} />
@@ -6136,22 +6247,22 @@ function postKey(restaurantId, postId) {
           ))}
         </View>
 
-        <View style={styles.dineProfileLevelCard}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Abrir Jornada no Dine" onPress={() => navigateTo('journey')} style={styles.dineProfileLevelCard}>
           <View style={styles.dineProfileMedal}>
-            <Image accessibilityLabel="Mascote Dine com medalha de conquista" source={mascotAssets.achievement} resizeMode="contain" style={styles.dineProfileAchievementMascot} />
+            <Image accessibilityLabel="Mascote Dine levantando o troféu da Jornada" source={mascotAssets.journeyTrophy} resizeMode="contain" style={styles.dineProfileAchievementMascot} />
           </View>
           <View style={styles.dineProfileLevelCopy}>
-            <Text style={styles.dineProfileLevelSmall}>Nível 12</Text>
+            <Text style={styles.dineProfileLevelSmall}>Nível {Math.max(1, dineRanks.findIndex((item) => item.name === rank.current.name) + 1)}</Text>
             <View style={styles.dineProfileLevelTitleRow}>
-              <Text style={styles.dineProfileLevelTitle}>Exploradora</Text>
+              <Text style={styles.dineProfileLevelTitle}>{rank.current.name}</Text>
               <Ionicons name="chevron-forward" size={22} color={colors.card} />
             </View>
             <View style={styles.dineProfileProgressTrack}>
               <View style={[styles.dineProfileProgressFill, { width: `${Math.max(24, Math.round(rank.progress * 100))}%` }]} />
             </View>
-            <Text style={styles.dineProfileLevelMeta}>2.450 / 3.500 pts para o próximo nível</Text>
+            <Text style={styles.dineProfileLevelMeta}>{rank.next ? `${gamification.points} / ${rank.next.minPoints} pts para o próximo nível` : `${gamification.points} pts no nível máximo`}</Text>
           </View>
-        </View>
+        </Pressable>
 
         <View style={styles.dineProfileSectionHeader}>
           <View style={styles.dineProfileSectionTitleRow}>
@@ -6424,9 +6535,9 @@ function postKey(restaurantId, postId) {
         )}
 
         <Text style={styles.profileJourneyTitle}>Sua jornada no Dine</Text>
-        <View style={styles.dineProfileLevelCard}>
+        <Pressable accessibilityRole="button" accessibilityLabel="Abrir Jornada no Dine" onPress={() => navigateTo('journey')} style={styles.dineProfileLevelCard}>
           <View style={styles.dineProfileMedal}>
-            <Image accessibilityLabel="Mascote Dine com medalha de conquista" source={mascotAssets.achievement} resizeMode="contain" style={styles.dineProfileAchievementMascot} />
+            <Image accessibilityLabel="Mascote Dine levantando o troféu da Jornada" source={mascotAssets.journeyTrophy} resizeMode="contain" style={styles.dineProfileAchievementMascot} />
           </View>
           <View style={styles.dineProfileLevelCopy}>
             <Text style={styles.dineProfileLevelSmall}>Nível {rankIndex}</Text>
@@ -6439,7 +6550,7 @@ function postKey(restaurantId, postId) {
             </View>
             <Text style={styles.dineProfileLevelMeta}>{nextMeta}</Text>
           </View>
-        </View>
+        </Pressable>
 
         <View style={styles.dineProfileSectionHeader}>
           <View style={styles.dineProfileSectionTitleRow}>
@@ -6516,6 +6627,125 @@ function postKey(restaurantId, postId) {
           <Ionicons name="checkmark-circle-outline" size={22} color={colors.card} />
           <Text style={styles.dineProfileEditButtonText}>Salvar perfil</Text>
         </Pressable>
+      </View>
+    );
+  }
+
+  function renderJourneyScreen() {
+    const gamification = mergeGamification(currentUser?.gamification);
+    const rank = rankForPoints(gamification.points);
+    const rankIndex = Math.max(0, dineRanks.findIndex((item) => item.name === rank.current.name));
+    const week = journeyWeek();
+    const earned = earnedAchievements(gamification);
+    const history = gamification.history || [];
+    const progressPercent = Math.max(4, Math.round(rank.progress * 100));
+    const pointsRemaining = rank.next ? Math.max(0, rank.next.minPoints - gamification.points) : 0;
+    return (
+      <View style={styles.journeyPage}>
+        {renderScreenHeader('Jornada no Dine', 'Explore, compartilhe e evolua com ações reais.')}
+
+        <LinearGradient colors={['#F13D0B', '#FF7542']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.journeyHero}>
+          <View style={styles.journeyHeroCopy}>
+            <Text style={styles.journeyHeroEyebrow}>NÍVEL {rankIndex + 1}</Text>
+            <Text style={styles.journeyHeroTitle}>{rank.current.name}</Text>
+            <Text style={styles.journeyHeroText}>{rank.current.description}</Text>
+            <View style={styles.journeyHeroPointsRow}>
+              <Text style={styles.journeyHeroPoints}>{formatCompactCount(gamification.points)} pts</Text>
+              <Text style={styles.journeyHeroNext}>{rank.next ? `${pointsRemaining} para ${rank.next.name}` : 'Nível máximo'}</Text>
+            </View>
+            <View style={styles.journeyProgressTrack}><View style={[styles.journeyProgressFill, { width: `${progressPercent}%` }]} /></View>
+          </View>
+          <Image accessibilityLabel="Mascote Dine levantando o troféu da Jornada" source={mascotAssets.journeyTrophy} resizeMode="contain" style={styles.journeyHeroMascot} />
+        </LinearGradient>
+
+        <View style={styles.journeyTruthCard}>
+          <Ionicons name="shield-checkmark-outline" size={20} color={colors.green} />
+          <Text style={styles.journeyTruthText}>Seus pontos vêm somente de reservas, avaliações, visitas e outras ações concluídas no Dine.</Text>
+        </View>
+
+        <View style={styles.journeySectionHeader}>
+          <View><Text style={styles.journeySectionEyebrow}>RENOVA TODA SEGUNDA</Text><Text style={styles.journeySectionTitle}>Missões da semana</Text></View>
+          <Text style={styles.journeyWeekEnd}>até {week.endLabel}</Text>
+        </View>
+        <View style={styles.journeyMissionList}>
+          {weeklyMissionRules.map((mission) => {
+            const progress = Math.min(mission.goal, weeklyMissionProgress(gamification, mission, week));
+            const completed = gamification.weekly?.key === week.key && gamification.weekly.completed?.includes(mission.id);
+            return (
+              <View key={mission.id} accessibilityLabel={`${mission.title}, ${progress} de ${mission.goal}`} style={[styles.journeyMissionCard, completed && styles.journeyMissionCardDone]}>
+                <View style={[styles.journeyMissionIcon, completed && styles.journeyMissionIconDone]}>
+                  <Ionicons name={completed ? 'checkmark' : mission.icon} size={21} color={completed ? colors.card : colors.redDark} />
+                </View>
+                <View style={styles.journeyMissionCopy}>
+                  <View style={styles.journeyMissionTitleRow}><Text style={styles.journeyMissionTitle}>{mission.title}</Text><Text style={styles.journeyMissionReward}>+{mission.reward} pts</Text></View>
+                  <Text style={styles.journeyMissionText}>{mission.description}</Text>
+                  <View style={styles.journeyMissionProgressRow}>
+                    <View style={styles.journeyMissionTrack}><View style={[styles.journeyMissionFill, { width: `${Math.round((progress / mission.goal) * 100)}%` }]} /></View>
+                    <Text style={styles.journeyMissionCount}>{progress}/{mission.goal}</Text>
+                  </View>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+
+        <View style={styles.journeySectionHeader}>
+          <View><Text style={styles.journeySectionEyebrow}>SELOS DO PERFIL</Text><Text style={styles.journeySectionTitle}>Conquistas</Text></View>
+          <Text style={styles.journeyWeekEnd}>{earned.length}/{achievementRules.length}</Text>
+        </View>
+        <View style={styles.journeyAchievementGrid}>
+          {achievementRules.map((rule) => {
+            const achieved = earned.some((item) => item.id === rule.id);
+            const current = Math.min(rule.goal, Number(gamification.metrics?.[rule.metric] || 0));
+            return (
+              <View key={rule.id} style={[styles.journeyAchievementCard, achieved && styles.journeyAchievementCardEarned]}>
+                <View style={[styles.journeyAchievementMedal, achieved && styles.journeyAchievementMedalEarned]}>
+                  <Ionicons name={achieved ? (rule.icon || 'ribbon') : 'lock-closed-outline'} size={24} color={achieved ? '#FFFFFF' : colors.muted} />
+                </View>
+                <Text style={styles.journeyAchievementTitle}>{rule.name}</Text>
+                <Text style={styles.journeyAchievementText}>{achieved ? rule.description : `${current}/${rule.goal} para desbloquear`}</Text>
+              </View>
+            );
+          })}
+        </View>
+
+        <View style={styles.journeySectionHeader}>
+          <View><Text style={styles.journeySectionEyebrow}>A CADA NÍVEL</Text><Text style={styles.journeySectionTitle}>Benefícios da jornada</Text></View>
+        </View>
+        <View style={styles.journeyBenefitList}>
+          {dineRanks.map((item, index) => {
+            const unlocked = index <= rankIndex;
+            return (
+              <View key={item.name} style={styles.journeyBenefitItem}>
+                <View style={[styles.journeyBenefitStep, unlocked && styles.journeyBenefitStepUnlocked]}><Text style={[styles.journeyBenefitStepText, unlocked && styles.journeyBenefitStepTextUnlocked]}>{index + 1}</Text></View>
+                <View style={styles.journeyBenefitCopy}><Text style={styles.journeyBenefitTitle}>{item.name}</Text><Text style={styles.journeyBenefitText}>{item.benefit}</Text></View>
+                <Ionicons name={unlocked ? 'checkmark-circle' : 'lock-closed-outline'} size={20} color={unlocked ? colors.green : colors.muted} />
+              </View>
+            );
+          })}
+          <View style={styles.journeyComingSoon}><Ionicons name="gift-outline" size={21} color={colors.redDark} /><View style={styles.journeyBenefitCopy}><Text style={styles.journeyBenefitTitle}>Vantagens de restaurantes</Text><Text style={styles.journeyBenefitText}>Benefícios de parceiros poderão ser adicionados futuramente, sempre identificados no app.</Text></View><Text style={styles.journeySoonPill}>Em breve</Text></View>
+        </View>
+
+        <View style={styles.journeySectionHeader}>
+          <View><Text style={styles.journeySectionEyebrow}>TRANSPARÊNCIA</Text><Text style={styles.journeySectionTitle}>Histórico de pontos</Text></View>
+        </View>
+        {history.length ? (
+          <View style={styles.journeyHistoryList}>
+            {history.map((entry) => (
+              <View key={entry.id} style={styles.journeyHistoryItem}>
+                <View style={styles.journeyHistoryIcon}><Ionicons name={entry.icon || 'sparkles'} size={19} color={colors.redDark} /></View>
+                <View style={styles.journeyHistoryCopy}><Text style={styles.journeyHistoryTitle}>{entry.label}</Text><Text numberOfLines={1} style={styles.journeyHistoryText}>{entry.detail || new Date(entry.createdAt).toLocaleDateString('pt-BR')}</Text></View>
+                <View style={styles.journeyHistoryValue}><Text style={styles.journeyHistoryPoints}>{entry.points ? `+${entry.points}` : 'Selo'}</Text><Text style={styles.journeyHistoryDate}>{new Date(entry.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}</Text></View>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.journeyEmptyHistory}>
+            <Image accessibilityLabel="Mascote Dine aguardando novas ações" source={mascotAssets.emptyState} resizeMode="contain" style={styles.journeyEmptyMascot} />
+            <Text style={styles.journeyEmptyTitle}>Sua história começa agora</Text>
+            <Text style={styles.journeyEmptyText}>Quando você concluir uma ação, os pontos e a origem aparecerão aqui.</Text>
+          </View>
+        )}
       </View>
     );
   }
@@ -8590,6 +8820,7 @@ function postKey(restaurantId, postId) {
       about: renderAboutScreen,
       settings: renderSettingsScreen,
       invites: renderTrackedInvitesScreen,
+      journey: renderJourneyScreen,
       favorites: renderFavorites,
       rankings: renderRankings,
       feedProfile: renderFeedProfileScreen,
@@ -12589,6 +12820,69 @@ const styles = StyleSheet.create({
   reservationPartyTextActive: { color: colors.card },
   reservationFooter: { paddingTop: 13, gap: 6 },
   reservationFooterHint: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9, textAlign: 'center' },
+  journeyPage: { paddingBottom: 30 },
+  journeyHero: { minHeight: 220, borderRadius: 22, padding: 20, overflow: 'hidden', flexDirection: 'row', alignItems: 'center' },
+  journeyHeroCopy: { width: '64%', zIndex: 2 },
+  journeyHeroEyebrow: { color: '#FFE0D3', fontFamily: 'Nunito_800ExtraBold', fontSize: 10, letterSpacing: 1.2 },
+  journeyHeroTitle: { color: '#FFFFFF', fontFamily: titleFont, fontSize: 30, lineHeight: 34, marginTop: 3 },
+  journeyHeroText: { color: 'rgba(255,255,255,0.88)', fontFamily: 'Nunito_700Bold', fontSize: 11, lineHeight: 16, marginTop: 3 },
+  journeyHeroPointsRow: { marginTop: 18, flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  journeyHeroPoints: { color: '#FFFFFF', fontFamily: bodyFont, fontSize: 15 },
+  journeyHeroNext: { color: 'rgba(255,255,255,0.78)', fontFamily: 'Nunito_700Bold', fontSize: 9 },
+  journeyProgressTrack: { height: 8, marginTop: 8, borderRadius: 99, backgroundColor: 'rgba(255,255,255,0.24)', overflow: 'hidden' },
+  journeyProgressFill: { height: '100%', borderRadius: 99, backgroundColor: '#FFFFFF' },
+  journeyHeroMascot: { position: 'absolute', right: -32, bottom: -18, width: 190, height: 190 },
+  journeyTruthCard: { minHeight: 60, marginTop: 12, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(33,138,75,0.18)', backgroundColor: colors.greenSoft, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  journeyTruthText: { flex: 1, color: colors.green, fontFamily: 'Nunito_700Bold', fontSize: 11, lineHeight: 16 },
+  journeySectionHeader: { minHeight: 60, marginTop: 24, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 10 },
+  journeySectionEyebrow: { color: colors.redDark, fontFamily: 'Nunito_800ExtraBold', fontSize: 9, letterSpacing: 0.9 },
+  journeySectionTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 22, lineHeight: 27 },
+  journeyWeekEnd: { color: colors.muted, fontFamily: 'Nunito_700Bold', fontSize: 10, paddingBottom: 4 },
+  journeyMissionList: { gap: 9 },
+  journeyMissionCard: { minHeight: 92, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 11 },
+  journeyMissionCardDone: { borderColor: 'rgba(33,138,75,0.28)', backgroundColor: '#F5FBF7' },
+  journeyMissionIcon: { width: 42, height: 42, borderRadius: 14, backgroundColor: '#FFF1EA', alignItems: 'center', justifyContent: 'center' },
+  journeyMissionIconDone: { backgroundColor: colors.green },
+  journeyMissionCopy: { flex: 1, minWidth: 0 },
+  journeyMissionTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  journeyMissionTitle: { flex: 1, color: colors.ink, fontFamily: bodyFont, fontSize: 14 },
+  journeyMissionReward: { color: colors.redDark, fontFamily: bodyFont, fontSize: 10 },
+  journeyMissionText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 10, lineHeight: 14, marginTop: 2 },
+  journeyMissionProgressRow: { marginTop: 9, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  journeyMissionTrack: { flex: 1, height: 6, borderRadius: 99, backgroundColor: '#EEE9E4', overflow: 'hidden' },
+  journeyMissionFill: { height: '100%', borderRadius: 99, backgroundColor: colors.redDark },
+  journeyMissionCount: { minWidth: 25, color: colors.muted, fontFamily: bodyFont, fontSize: 9, textAlign: 'right' },
+  journeyAchievementGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 9 },
+  journeyAchievementCard: { width: '48.7%', minHeight: 150, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: '#F6F3F0', padding: 12 },
+  journeyAchievementCardEarned: { backgroundColor: '#FFF8F3', borderColor: 'rgba(241,61,11,0.25)' },
+  journeyAchievementMedal: { width: 42, height: 42, borderRadius: 14, backgroundColor: '#E7E2DD', alignItems: 'center', justifyContent: 'center', marginBottom: 9 },
+  journeyAchievementMedalEarned: { backgroundColor: colors.redDark },
+  journeyAchievementTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 13, lineHeight: 17 },
+  journeyAchievementText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9, lineHeight: 13, marginTop: 4 },
+  journeyBenefitList: { overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
+  journeyBenefitItem: { minHeight: 66, paddingHorizontal: 12, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.softLine, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  journeyBenefitStep: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EEEAE6', alignItems: 'center', justifyContent: 'center' },
+  journeyBenefitStepUnlocked: { backgroundColor: colors.green },
+  journeyBenefitStepText: { color: colors.muted, fontFamily: bodyFont, fontSize: 11 },
+  journeyBenefitStepTextUnlocked: { color: colors.card },
+  journeyBenefitCopy: { flex: 1, minWidth: 0 },
+  journeyBenefitTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  journeyBenefitText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9, lineHeight: 13, marginTop: 2 },
+  journeyComingSoon: { minHeight: 78, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#FFF7F1' },
+  journeySoonPill: { color: colors.redDark, fontFamily: bodyFont, fontSize: 8, backgroundColor: '#FFFFFF', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 4 },
+  journeyHistoryList: { overflow: 'hidden', borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card },
+  journeyHistoryItem: { minHeight: 68, paddingHorizontal: 11, paddingVertical: 9, borderBottomWidth: 1, borderBottomColor: colors.softLine, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  journeyHistoryIcon: { width: 38, height: 38, borderRadius: 13, backgroundColor: '#FFF1EA', alignItems: 'center', justifyContent: 'center' },
+  journeyHistoryCopy: { flex: 1, minWidth: 0 },
+  journeyHistoryTitle: { color: colors.ink, fontFamily: bodyFont, fontSize: 12 },
+  journeyHistoryText: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 9, marginTop: 2 },
+  journeyHistoryValue: { alignItems: 'flex-end', gap: 2 },
+  journeyHistoryPoints: { color: colors.green, fontFamily: bodyFont, fontSize: 12 },
+  journeyHistoryDate: { color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 8 },
+  journeyEmptyHistory: { minHeight: 230, borderRadius: 16, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center', padding: 20 },
+  journeyEmptyMascot: { width: 128, height: 128, marginBottom: -7 },
+  journeyEmptyTitle: { color: colors.ink, fontFamily: titleFont, fontSize: 18 },
+  journeyEmptyText: { maxWidth: 270, color: colors.muted, fontFamily: 'Nunito_400Regular', fontSize: 11, lineHeight: 16, textAlign: 'center', marginTop: 4 },
   settingsDangerZone: { marginTop: 2, marginBottom: 20 },
   settingsLogoutButton: { minHeight: 50, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(200,70,37,0.28)', backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   settingsLogoutText: { color: colors.redDark, fontFamily: bodyFont, fontSize: 14 }
