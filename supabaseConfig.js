@@ -399,6 +399,162 @@ export async function fetchRestaurantsFromDb() {
   return (data || []).map(normalizeRestaurantFromDb);
 }
 
+function normalizeExternalPlaceFromDb(row) {
+  return {
+    id: row?.id,
+    source: row?.source || '',
+    sourceId: row?.source_id || '',
+    name: row?.name || '',
+    type: row?.basic_category === 'bar'
+      ? 'Bar'
+      : row?.basic_category === 'coffee_shop'
+        ? 'Cafeteria'
+        : row?.basic_category === 'casual_eatery'
+          ? 'Lanches e sobremesas'
+          : 'Restaurante',
+    basicCategory: row?.basic_category || '',
+    category: row?.category || '',
+    address: row?.address || '',
+    district: row?.district || '',
+    city: row?.city || '',
+    state: row?.state || '',
+    postcode: row?.postcode || '',
+    countryCode: row?.country_code || '',
+    latitude: Number(row?.latitude),
+    longitude: Number(row?.longitude),
+    confidence: Number(row?.confidence || 0),
+    operatingStatus: row?.operating_status || '',
+    sourceLicense: row?.source_license || '',
+    sourceUpdatedAt: row?.source_updated_at || '',
+    lastSyncedAt: row?.last_synced_at || '',
+    status: row?.status || 'active',
+    claimedRestaurantId: row?.claimed_restaurant_id || null,
+    isExternal: true
+  };
+}
+
+export async function fetchExternalPlacesFromDb({
+  west = -49.46,
+  south = -20.92,
+  east = -49.29,
+  north = -20.74,
+  take = 250
+} = {}) {
+  const client = requireClient();
+  if (!client) return null;
+  const { data, error } = await client
+    .from('external_places')
+    .select('*')
+    .eq('status', 'active')
+    .gte('longitude', west)
+    .lte('longitude', east)
+    .gte('latitude', south)
+    .lte('latitude', north)
+    .order('confidence', { ascending: false })
+    .limit(Math.min(Number(take) || 250, 500));
+  throwIfError(error);
+  return (data || []).map(normalizeExternalPlaceFromDb);
+}
+
+function normalizeExternalPlaceClaimFromDb(row) {
+  const place = row?.external_places || {};
+  return {
+    id: row?.id,
+    externalPlaceId: row?.external_place_id,
+    claimantId: row?.claimant_id,
+    claimantName: row?.claimant_name || '',
+    claimantEmail: row?.claimant_email || '',
+    claimantPhone: row?.claimant_phone || '',
+    claimantCnpj: row?.claimant_cnpj || '',
+    restaurantName: row?.restaurant_name || place?.name || '',
+    restaurantAddress: row?.restaurant_address || place?.address || '',
+    source: place?.source || '',
+    sourceId: place?.source_id || '',
+    status: row?.status || 'pending',
+    notes: row?.notes || '',
+    rejectionReason: row?.rejection_reason || '',
+    reviewedAt: row?.reviewed_at || '',
+    createdAt: row?.created_at || nowIso()
+  };
+}
+
+export async function claimExternalPlaceInDb(place, user, details = {}) {
+  assertSignedIn(user);
+  const client = requireClient();
+  if (!client || !place?.source || !place?.sourceId) return null;
+  const { data: externalPlace, error: placeError } = await client
+    .from('external_places')
+    .select('id')
+    .eq('source', place.source)
+    .eq('source_id', place.sourceId)
+    .eq('status', 'active')
+    .maybeSingle();
+  throwIfError(placeError);
+  if (!externalPlace?.id) throw new Error('EXTERNAL_PLACE_NOT_SYNCED');
+  const { data: existingClaim, error: existingError } = await client
+    .from('external_place_claims')
+    .select('id,status')
+    .eq('external_place_id', externalPlace.id)
+    .eq('claimant_id', user.id)
+    .eq('status', 'pending')
+    .maybeSingle();
+  throwIfError(existingError);
+  if (existingClaim) return existingClaim;
+  const { data, error } = await client
+    .from('external_place_claims')
+    .insert({
+      external_place_id: externalPlace.id,
+      claimant_id: user.id,
+      claimant_name: String(details.claimantName || user.name || '').trim(),
+      claimant_email: String(user.email || '').trim() || null,
+      claimant_phone: String(details.claimantPhone || '').replace(/\D/g, ''),
+      claimant_cnpj: String(details.claimantCnpj || '').replace(/\D/g, ''),
+      restaurant_name: String(details.restaurantName || place.name || '').trim(),
+      restaurant_address: String(place.address || '').trim() || null,
+      status: 'pending',
+      notes: String(details.notes || '').trim() || null,
+      updated_at: nowIso()
+    })
+    .select('id,status,created_at')
+    .single();
+  throwIfError(error);
+  return data;
+}
+
+export async function fetchExternalPlaceClaimsFromDb() {
+  const client = requireClient();
+  if (!client) return null;
+  const { data, error } = await client
+    .from('external_place_claims')
+    .select('*, external_places(name,address,source,source_id)')
+    .order('created_at', { ascending: false })
+    .limit(250);
+  throwIfError(error);
+  return (data || []).map(normalizeExternalPlaceClaimFromDb);
+}
+
+export async function updateExternalPlaceClaimStatusInDb(claimId, status, adminUser, rejectionReason = '') {
+  if (!claimId) return null;
+  assertCanAdmin(adminUser);
+  const client = requireClient();
+  if (!client) return null;
+  const nextStatus = ['approved', 'rejected', 'cancelled'].includes(status) ? status : 'pending';
+  if (!['approved', 'rejected'].includes(nextStatus)) throw new Error('INVALID_CLAIM_STATUS');
+  const { error: reviewError } = await client.rpc('review_external_place_claim', {
+    target_claim_id: claimId,
+    decision: nextStatus,
+    reason: String(rejectionReason || '').trim() || null
+  });
+  throwIfError(reviewError);
+  const { data, error } = await client
+    .from('external_place_claims')
+    .select('*, external_places(name,address,source,source_id)')
+    .eq('id', claimId)
+    .single();
+  throwIfError(error);
+  return normalizeExternalPlaceClaimFromDb(data);
+}
+
 export async function fetchOwnerRestaurantsFromDb(ownerId) {
   const client = requireClient();
   if (!client || !ownerId) return null;
