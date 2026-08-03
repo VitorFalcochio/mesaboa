@@ -85,13 +85,13 @@ export const collections = [
 ];
 
 export const dineRanks = [
-  { name: 'Beliscador', minPoints: 0, description: 'Começou a montar seu mapa de bons lugares.' },
-  { name: 'Caçador de Mesa', minPoints: 100, description: 'Já fareja boas mesas pela cidade.' },
-  { name: 'Garfo Curioso', minPoints: 250, description: 'Explora cozinhas, bairros e experiências novas.' },
-  { name: 'Roteirista de Rolês', minPoints: 500, description: 'Sabe transformar fome em plano bom.' },
-  { name: 'Sommelier de Experiências', minPoints: 900, description: 'Percebe ambiente, atendimento e ocasião.' },
-  { name: 'Curador Dine', minPoints: 1400, description: 'Suas dicas ajudam outras pessoas a escolher melhor.' },
-  { name: 'Lenda da Reserva', minPoints: 2200, description: 'Referência máxima para descobrir restaurantes.' }
+  { name: 'Explorador', minPoints: 0, description: 'Começou a montar seu mapa gastronômico.', benefit: 'Selo Explorador no perfil' },
+  { name: 'Descobridor', minPoints: 100, description: 'Já encontra boas mesas pela cidade.', benefit: 'Novas missões semanais' },
+  { name: 'Degustador', minPoints: 250, description: 'Explora cozinhas, bairros e experiências.', benefit: 'Moldura Degustador no perfil' },
+  { name: 'Especialista', minPoints: 500, description: 'Suas avaliações ajudam outras pessoas.', benefit: 'Selo de avaliação em destaque' },
+  { name: 'Curador', minPoints: 900, description: 'Transforma descobertas em ótimas recomendações.', benefit: 'Identidade de Curador Dine' },
+  { name: 'Embaixador', minPoints: 1400, description: 'Movimenta a comunidade gastronômica.', benefit: 'Acesso antecipado a experiências' },
+  { name: 'Lenda Dine', minPoints: 2200, description: 'Referência máxima para descobrir restaurantes.', benefit: 'Selo máximo da Jornada' }
 ];
 
 export const pointRewards = {
@@ -102,13 +102,25 @@ export const pointRewards = {
   like: 2,
   commentLiked: 10,
   collection: 50,
-  invite: 80
+  invite: 80,
+  reservation: 25,
+  post: 15
 };
 
 export const achievementRules = [
+  { id: 'first_save', name: 'De Olho', description: 'Salvou seu primeiro restaurante.', metric: 'favorites', goal: 1, icon: 'heart' },
   { id: 'first_bite', name: 'Primeira Mordida', description: 'Publicou sua primeira avaliação.', metric: 'reviews', goal: 1 },
+  { id: 'table_reserved', name: 'Mesa Marcada', description: 'Fez sua primeira reserva pelo Dine.', metric: 'reservations', goal: 1, icon: 'calendar' },
+  { id: 'voice_of_dine', name: 'Voz da Comunidade', description: 'Publicou 3 descobertas no Feed.', metric: 'posts', goal: 3, icon: 'megaphone' },
   { id: 'map_in_hand', name: 'Mapa na Mão', description: 'Abriu rota para 5 restaurantes.', metric: 'maps', goal: 5 },
   { id: 'table_full', name: 'Mesa Cheia', description: 'Convidou 3 amigos.', metric: 'invites', goal: 3 },
   { id: 'critic_house', name: 'Crítico da Casa', description: 'Curtiu 10 comentários úteis da comunidade.', metric: 'likesGiven', goal: 10 },
   { id: 'neighborhood_explorer', name: 'Explorador de Bairro', description: 'Marcou 5 restaurantes como conhecidos.', metric: 'known', goal: 5 }
+];
+
+export const weeklyMissionRules = [
+  { id: 'weekly_saves', title: 'Monte seu roteiro', description: 'Salve 3 restaurantes nesta semana.', event: 'favorite', goal: 3, reward: 25, icon: 'bookmark-outline' },
+  { id: 'weekly_visit', title: 'Descoberta por perto', description: 'Registre 2 lugares que você conheceu.', event: 'known', goal: 2, reward: 60, icon: 'location-outline' },
+  { id: 'weekly_review', title: 'Conte como foi', description: 'Publique 1 avaliação completa.', event: 'review', goal: 1, reward: 40, icon: 'star-outline' },
+  { id: 'weekly_reservation', title: 'Próxima mesa', description: 'Faça 1 reserva pelo Dine.', event: 'reservation', goal: 1, reward: 50, icon: 'calendar-outline' }
 ];
