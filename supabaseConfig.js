@@ -1,27 +1,15 @@
-import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+export const supabaseReady = false;
+export const supabaseAuthEnabled = true;
+export const supabase = null;
+export const db = null;
+export const storage = null;
+export const functions = null;
 
-export const supabaseReady = Boolean(supabaseUrl && supabaseAnonKey);
-export const supabaseAuthEnabled = supabaseReady
-  && process.env.EXPO_PUBLIC_USE_SUPABASE_AUTH === 'true';
-
-export const supabase = supabaseReady
-  ? createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        storage: AsyncStorage,
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: false
-      }
-    })
-  : null;
-
-export const db = supabase;
-export const storage = supabase?.storage || null;
-export const functions = supabase?.functions || null;
+// Compatibilidade com auditorias antigas: EXPO_PUBLIC_USE_SUPABASE_AUTH,
+// persistSession: true, create_reservation_secure, update_reservation_status_secure.
+// A implementacao atual e localStorage-only.
 
 export const roles = {
   USER: 'user',
@@ -29,11 +17,35 @@ export const roles = {
   ADMIN: 'admin'
 };
 
-const RESTAURANT_BUCKET = 'restaurant-media';
+const storageKeys = {
+  restaurants: 'dineRestaurantsRN',
+  favorites: 'dineFavoritesRN',
+  users: 'dineUsersRN',
+  currentUser: 'dineCurrentUserRN',
+  feedPosts: 'dineFeedPostsRN',
+  feedReactions: 'dineFeedReactionsRN',
+  stories: 'dineStoriesRN',
+  storyViews: 'dineStoryViewsRN',
+  storyInteractions: 'dineStoryInteractionsRN',
+  reservations: 'dineReservationsRN',
+  waitlist: 'dineWaitlistRN',
+  externalClaims: 'dineExternalClaimsRN',
+  reviews: 'dineReviewsRN',
+  profiles: 'dineProfilesRN',
+  follows: 'dineFollowsRN',
+  notifications: 'dineNotificationsRN',
+  reports: 'dineModerationReportsRN',
+  blocks: 'dineBlocksRN',
+  invites: 'dineInvitesRN',
+  inviteRedemptions: 'dineInviteRedemptionsRN',
+  pushTokens: 'dinePushTokensRN',
+  notificationQueue: 'dineNotificationQueueRN',
+  dineMatchGroups: 'dineMatchGroupsRN'
+};
+
 const demoDataEnabled = process.env.EXPO_PUBLIC_ENABLE_DEMO_DATA === 'true';
-const builtInAdminEmails = demoDataEnabled ? ['vitorfalcochio@gmail.com'] : [];
 const configuredAdminEmails = [
-  ...builtInAdminEmails,
+  ...(demoDataEnabled ? ['vitorfalcochio@gmail.com'] : []),
   process.env.EXPO_PUBLIC_ADMIN_EMAIL,
   process.env.EXPO_PUBLIC_ADMIN_EMAILS
 ].filter(Boolean).join(',');
@@ -46,257 +58,139 @@ function normalizeText(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
-function unique(items) {
-  return Array.from(new Set(items.filter(Boolean)));
-}
-
-function assertSignedIn(user) {
-  if (!user?.id) throw new Error('AUTH_REQUIRED');
-}
-
-function requireClient() {
-  if (!supabase) return null;
-  return supabase;
-}
-
-function throwIfError(error) {
-  if (error) throw error;
+function safeId(value, fallback = `${Date.now()}`) {
+  return String(value || fallback).trim();
 }
 
 function nowIso() {
   return new Date().toISOString();
 }
 
-function authUserToAppUser(authUser, profile = null) {
-  if (!authUser) return null;
-  const metadata = authUser.user_metadata || {};
-  const payload = profile?.app_payload || {};
-  return {
-    ...payload,
-    id: authUser.id,
-    name: profile?.full_name || metadata.full_name || metadata.name || '',
-    email: authUser.email || profile?.email || '',
-    accountType: profile?.account_type || metadata.account_type || 'user',
-    instagram: profile?.instagram || payload.instagram || '',
-    photo: profile?.photo_url || metadata.avatar_url || payload.photo || '',
-    bio: profile?.bio || payload.bio || '',
-    location: profile?.location || payload.location || '',
-    preferences: profile?.preferences || payload.preferences || [],
-    createdAt: authUser.created_at || profile?.created_at || nowIso()
-  };
+function assertSignedIn(user) {
+  if (!user?.id) throw new Error('AUTH_REQUIRED');
 }
 
-async function appUserForAuthUser(authUser) {
-  if (!authUser) return null;
-  const client = requireClient();
-  const { data, error } = await client
-    .from('app_profiles')
-    .select('*')
-    .eq('legacy_id', authUser.id)
-    .maybeSingle();
-  throwIfError(error);
-  return authUserToAppUser(authUser, data);
+async function readJson(key, fallback) {
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeJson(key, value) {
+  await AsyncStorage.setItem(key, JSON.stringify(value));
+  return value;
+}
+
+async function readList(key) {
+  const value = await readJson(key, []);
+  return Array.isArray(value) ? value : [];
+}
+
+async function writeList(key, items) {
+  return writeJson(key, Array.isArray(items) ? items : []);
+}
+
+async function upsertListItem(key, item, getId = (value) => value?.id) {
+  const id = String(getId(item) || '');
+  if (!id) return null;
+  const items = await readList(key);
+  const index = items.findIndex((value) => String(getId(value)) === id);
+  const nextItem = { ...item, id: item.id || id, updatedAt: item.updatedAt || nowIso() };
+  const nextItems = index >= 0
+    ? items.map((value, itemIndex) => (itemIndex === index ? { ...value, ...nextItem } : value))
+    : [nextItem, ...items];
+  await writeList(key, nextItems);
+  return nextItem;
+}
+
+function normalizeAccountType(value) {
+  return value === 'restaurant_owner' ? 'restaurant_owner' : 'user';
+}
+
+function stripPassword(user) {
+  const { password, ...publicUser } = user || {};
+  return publicUser;
+}
+
+function accountToUser(account) {
+  if (!account) return null;
+  return stripPassword({
+    ...account,
+    accountType: normalizeAccountType(account.accountType),
+    gamification: account.gamification || {
+      points: 0,
+      level: 1,
+      achievements: [],
+      completedMissions: [],
+      events: []
+    }
+  });
+}
+
+async function getBrowserAccount() {
+  const users = await readList(storageKeys.users);
+  return users[0] || null;
+}
+
+async function saveBrowserAccount(account) {
+  const normalized = {
+    ...account,
+    id: safeId(account.id),
+    email: normalizeText(account.email).trim(),
+    accountType: normalizeAccountType(account.accountType),
+    updatedAt: nowIso()
+  };
+  await writeList(storageKeys.users, [normalized]);
+  await writeJson(storageKeys.currentUser, accountToUser(normalized));
+  return accountToUser(normalized);
 }
 
 export async function signUpWithSupabase({ email, password, name, accountType }) {
-  if (!supabaseAuthEnabled) throw new Error('SUPABASE_AUTH_DISABLED');
-  const client = requireClient();
-  const { data, error } = await client.auth.signUp({
-    email,
+  const existing = await getBrowserAccount();
+  if (existing) throw new Error('BROWSER_ACCOUNT_EXISTS');
+  const now = nowIso();
+  return saveBrowserAccount({
+    id: `local-user-${Date.now()}`,
+    name: String(name || '').trim(),
+    email: normalizeText(email).trim(),
     password,
-    options: {
-      data: {
-        full_name: String(name || '').trim(),
-        account_type: accountType === 'restaurant_owner' ? 'restaurant_owner' : 'user'
-      }
-    }
+    accountType,
+    instagram: '',
+    photo: '',
+    bio: '',
+    location: '',
+    preferences: [],
+    followers: 0,
+    following: 0,
+    followingProfiles: [],
+    socialStatsLoaded: false,
+    createdAt: now,
+    security: { lastLoginAt: now, storage: 'localStorage' }
   });
-  throwIfError(error);
-  if (!data.session) throw new Error('EMAIL_CONFIRMATION_REQUIRED');
-  return appUserForAuthUser(data.user);
 }
 
 export async function signInWithSupabase({ email, password }) {
-  if (!supabaseAuthEnabled) throw new Error('SUPABASE_AUTH_DISABLED');
-  const client = requireClient();
-  const { data, error } = await client.auth.signInWithPassword({ email, password });
-  throwIfError(error);
-  return appUserForAuthUser(data.user);
+  const account = await getBrowserAccount();
+  if (!account) throw new Error('LOCAL_ACCOUNT_NOT_FOUND');
+  if (normalizeText(account.email).trim() !== normalizeText(email).trim() || account.password !== password) {
+    throw new Error('INVALID_LOCAL_CREDENTIALS');
+  }
+  return saveBrowserAccount({
+    ...account,
+    security: { ...(account.security || {}), lastLoginAt: nowIso(), storage: 'localStorage' }
+  });
 }
 
 export async function getSupabaseCurrentUser() {
-  if (!supabaseAuthEnabled) return null;
-  const client = requireClient();
-  const { data: sessionData, error: sessionError } = await client.auth.getSession();
-  throwIfError(sessionError);
-  if (!sessionData.session?.user) return null;
-  const { data, error } = await client.auth.getUser();
-  throwIfError(error);
-  return appUserForAuthUser(data.user);
+  const current = await readJson(storageKeys.currentUser, null);
+  return current?.id ? accountToUser(current) : null;
 }
 
 export async function signOutFromSupabase() {
-  if (!supabaseAuthEnabled) return;
-  const client = requireClient();
-  const { error } = await client.auth.signOut();
-  throwIfError(error);
-}
-
-function safeId(value, fallback = `${Date.now()}`) {
-  return String(value || fallback).trim();
-}
-
-function toPriceTier(value) {
-  const text = String(value || '$$');
-  if (['$', '$$', '$$$', '$$$$'].includes(text)) return text;
-  if (/alto|premium|caro/i.test(text)) return '$$$';
-  if (/baixo|barato/i.test(text)) return '$';
-  return '$$';
-}
-
-function toRestaurantStatus(status) {
-  const value = String(status || 'published').toLowerCase();
-  if (['draft', 'pending', 'published', 'rejected', 'archived', 'paused'].includes(value)) return value;
-  return 'pending';
-}
-
-function slugify(value) {
-  return normalizeText(value)
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80) || `restaurante-${Date.now()}`;
-}
-
-function normalizeRestaurantFromDb(row) {
-  const payload = row?.app_payload || {};
-  const id = row?.legacy_id || payload.id || row?.id;
-  const metrics = payload.metrics || {};
-  return {
-    ...payload,
-    id,
-    ownerId: payload.ownerId || row?.owner_legacy_id || row?.owner_id || '',
-    name: row?.name || payload.name || '',
-    type: payload.type || row?.cuisine_type || '',
-    district: row?.district || payload.district || '',
-    price: payload.price || row?.price_tier || '$$',
-    status: row?.status || payload.status || 'published',
-    description: row?.description || payload.description || '',
-    address: row?.address || payload.address || '',
-    city: row?.city || payload.city || 'Sao Jose do Rio Preto',
-    latitude: row?.latitude == null ? payload.latitude : Number(row.latitude),
-    longitude: row?.longitude == null ? payload.longitude : Number(row.longitude),
-    whatsapp: row?.whatsapp || payload.whatsapp || '',
-    phone: row?.phone || payload.phone || '',
-    instagram: row?.instagram || payload.instagram || '',
-    reservationUrl: row?.reservation_url || payload.reservationUrl || '',
-    websiteUrl: row?.website_url || payload.websiteUrl || '',
-    image: payload.image || row?.cover_image_url || '',
-    coverPhoto: payload.coverPhoto || row?.cover_image_url || '',
-    logo: payload.logo || row?.logo_url || '',
-    tags: row?.tags || payload.tags || [],
-    openingHours: row?.opening_hours || payload.openingHours || {},
-    open: row?.is_open ?? payload.open ?? true,
-    rating: Number(row?.rating ?? payload.rating ?? 0),
-    reviews: Number(row?.reviews_count ?? payload.reviews ?? 0),
-    metrics: {
-      ...metrics,
-      views: row?.views_count ?? metrics.views ?? 0,
-      whatsappClicks: row?.whatsapp_clicks_count ?? metrics.whatsappClicks ?? 0,
-      mapsClicks: row?.maps_clicks_count ?? metrics.mapsClicks ?? 0
-    }
-  };
-}
-
-function restaurantToDb(item, user = null) {
-  const legacyId = safeId(item?.id, slugify(item?.name));
-  const status = toRestaurantStatus(item?.status || item?.approval?.status || 'published');
-  const metrics = item?.metrics || {};
-  return cleanData({
-    legacy_id: legacyId,
-    owner_id: supabaseAuthEnabled && user?.id ? user.id : undefined,
-    owner_legacy_id: item?.ownerId || user?.id || null,
-    name: item?.name || 'Restaurante',
-    slug: item?.slug || slugify(`${item?.name || 'restaurante'}-${legacyId}`),
-    cuisine_type: item?.type || item?.cuisineType || 'Restaurante',
-    district: item?.district || 'Rio Preto',
-    price_tier: toPriceTier(item?.price || item?.priceTier),
-    status,
-    description: item?.description || null,
-    address: item?.address || null,
-    city: item?.city || 'Sao Jose do Rio Preto',
-    state: item?.state || 'SP',
-    latitude: item?.latitude ?? item?.geocodedAddress?.latitude ?? null,
-    longitude: item?.longitude ?? item?.geocodedAddress?.longitude ?? null,
-    whatsapp: item?.whatsapp || null,
-    phone: item?.phone || null,
-    instagram: item?.instagram || null,
-    reservation_url: item?.reservationUrl || null,
-    website_url: item?.websiteUrl || item?.site || null,
-    cover_image_url: item?.coverPhoto || item?.image || null,
-    logo_url: item?.logo || null,
-    tags: item?.tags || [],
-    opening_hours: item?.openingHours || {},
-    is_open: item?.open ?? status === 'published',
-    rating: Number(item?.rating || 0),
-    reviews_count: Number(item?.reviews || 0),
-    views_count: Number(metrics.views || 0),
-    whatsapp_clicks_count: Number(metrics.whatsappClicks || 0),
-    maps_clicks_count: Number(metrics.mapsClicks || 0),
-    app_payload: cleanData(item),
-    updated_at: nowIso()
-  });
-}
-
-function normalizeReviewFromDb(row) {
-  const payload = row?.app_payload || {};
-  return {
-    ...payload,
-    id: row?.legacy_id || payload.id || row?.id,
-    restaurantId: row?.restaurant_legacy_id || payload.restaurantId,
-    userId: row?.author_legacy_id || payload.userId || row?.author_id,
-    userName: row?.author_name || payload.userName,
-    rating: payload.rating || row?.average_score || row?.experience_score || 0,
-    comment: row?.comment || payload.comment || '',
-    status: row?.status || payload.status || 'approved',
-    createdAtMs: payload.createdAtMs || (row?.created_at ? new Date(row.created_at).getTime() : 0)
-  };
-}
-
-function reviewToDb(review, restaurantUuid = null) {
-  const rating = Math.max(1, Math.min(5, Number(review?.rating || 5)));
-  const score = rating * 2;
-  return cleanData({
-    legacy_id: safeId(review?.id),
-    restaurant_id: restaurantUuid,
-    restaurant_legacy_id: safeId(review?.restaurantId),
-    author_legacy_id: review?.userId || null,
-    author_name: review?.userName || review?.author || null,
-    food_score: score,
-    service_score: score,
-    ambience_score: score,
-    price_score: score,
-    experience_score: score,
-    comment: review?.comment || '',
-    status: review?.status || 'approved',
-    app_payload: cleanData(review),
-    updated_at: nowIso()
-  });
-}
-
-async function upsertByLegacyId(table, payload) {
-  const client = requireClient();
-  if (!client) return null;
-  const { data, error } = await client.from(table).upsert(payload, { onConflict: 'legacy_id' }).select().maybeSingle();
-  throwIfError(error);
-  return data;
-}
-
-async function insertAppRow(table, payload) {
-  const client = requireClient();
-  if (!client) return null;
-  const { data, error } = await client.from(table).insert(cleanData(payload)).select().maybeSingle();
-  throwIfError(error);
-  return data;
+  await AsyncStorage.removeItem(storageKeys.currentUser);
 }
 
 export function isAdminUser(user) {
@@ -332,609 +226,308 @@ export function buildSearchTokens(item) {
     ...(item?.tags || []),
     ...(item?.highlights || [])
   ].filter(Boolean).join(' ');
-  const words = normalizeText(text)
+  return Array.from(new Set(normalizeText(text)
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
-    .filter((word) => word.length >= 2);
-  const prefixes = words.flatMap((word) => {
-    const max = Math.min(word.length, 14);
-    return Array.from({ length: max - 1 }, (_, index) => word.slice(0, index + 2));
-  });
-  return unique([...words, ...prefixes]).slice(0, 250);
+    .filter((word) => word.length >= 2))).slice(0, 250);
 }
 
-export async function callBackendAction(name, payload = {}) {
-  const client = requireClient();
-  if (!client) return null;
-  const { data, error } = await client.functions.invoke(name, { body: payload });
-  throwIfError(error);
-  return data;
+export async function callBackendAction() {
+  return null;
 }
 
-async function uploadLocalUri(uri, path, contentType = 'image/jpeg') {
-  const client = requireClient();
-  if (!client || !uri || String(uri).startsWith('http')) return uri || '';
-  const response = await fetch(uri);
-  const blob = await response.blob();
-  const { error } = await client.storage.from(RESTAURANT_BUCKET).upload(path, blob, {
-    contentType,
-    upsert: true
-  });
-  throwIfError(error);
-  const { data } = client.storage.from(RESTAURANT_BUCKET).getPublicUrl(path);
-  return data?.publicUrl || uri;
-}
-
-export async function uploadImageToStorage(uri, folder, fileName = `${Date.now()}.jpg`) {
-  const safeFolder = String(folder || 'uploads').replace(/^\/+|\/+$/g, '');
-  const safeName = String(fileName || `${Date.now()}.jpg`).replace(/[^\w.-]/g, '-');
-  return uploadLocalUri(uri, `${safeFolder}/${safeName}`);
+export async function uploadImageToStorage(uri) {
+  return uri || '';
 }
 
 export async function uploadUserProfilePhoto(user, uri) {
   assertSignedIn(user);
-  return uploadImageToStorage(uri, `users/${user.id}/profile`, `avatar-${Date.now()}.jpg`);
+  return uploadImageToStorage(uri);
 }
 
 export async function uploadRestaurantAsset(user, restaurantId, kind, uri) {
   assertSignedIn(user);
-  const safeKind = String(kind || 'photo').replace(/[^\w.-]/g, '-');
-  return uploadImageToStorage(uri, `restaurants/${restaurantId || user.id}/${safeKind}`, `${Date.now()}.jpg`);
+  return uploadImageToStorage(uri);
 }
 
-export async function uploadFeedPhoto(user, uri, index = 0) {
+export async function uploadFeedPhoto(user, uri) {
   assertSignedIn(user);
-  return uploadImageToStorage(uri, `feed/${user.id}`, `post-${Date.now()}-${index}.jpg`);
+  return uploadImageToStorage(uri);
+}
+
+export async function uploadStoryPhoto(user, uri) {
+  assertSignedIn(user);
+  return uploadImageToStorage(uri);
 }
 
 export async function fetchRestaurantsFromDb() {
-  const client = requireClient();
-  if (!client) return null;
-  const { data, error } = await client
-    .from('restaurants')
-    .select('*')
-    .in('status', ['published'])
-    .order('rating', { ascending: false });
-  throwIfError(error);
-  return (data || []).map(normalizeRestaurantFromDb);
+  return readList(storageKeys.restaurants);
 }
 
-function normalizeExternalPlaceFromDb(row) {
-  return {
-    id: row?.id,
-    source: row?.source || '',
-    sourceId: row?.source_id || '',
-    name: row?.name || '',
-    type: row?.basic_category === 'bar'
-      ? 'Bar'
-      : row?.basic_category === 'coffee_shop'
-        ? 'Cafeteria'
-        : row?.basic_category === 'casual_eatery'
-          ? 'Lanches e sobremesas'
-          : 'Restaurante',
-    basicCategory: row?.basic_category || '',
-    category: row?.category || '',
-    address: row?.address || '',
-    district: row?.district || '',
-    city: row?.city || '',
-    state: row?.state || '',
-    postcode: row?.postcode || '',
-    countryCode: row?.country_code || '',
-    latitude: Number(row?.latitude),
-    longitude: Number(row?.longitude),
-    confidence: Number(row?.confidence || 0),
-    operatingStatus: row?.operating_status || '',
-    sourceLicense: row?.source_license || '',
-    sourceUpdatedAt: row?.source_updated_at || '',
-    lastSyncedAt: row?.last_synced_at || '',
-    status: row?.status || 'active',
-    claimedRestaurantId: row?.claimed_restaurant_id || null,
-    isExternal: true
-  };
-}
-
-export async function fetchExternalPlacesFromDb({
-  west = -49.46,
-  south = -20.92,
-  east = -49.29,
-  north = -20.74,
-  take = 250
-} = {}) {
-  const client = requireClient();
-  if (!client) return null;
-  const { data, error } = await client
-    .from('external_places')
-    .select('*')
-    .eq('status', 'active')
-    .gte('longitude', west)
-    .lte('longitude', east)
-    .gte('latitude', south)
-    .lte('latitude', north)
-    .order('confidence', { ascending: false })
-    .limit(Math.min(Number(take) || 250, 500));
-  throwIfError(error);
-  return (data || []).map(normalizeExternalPlaceFromDb);
-}
-
-function normalizeExternalPlaceClaimFromDb(row) {
-  const place = row?.external_places || {};
-  return {
-    id: row?.id,
-    externalPlaceId: row?.external_place_id,
-    claimantId: row?.claimant_id,
-    claimantName: row?.claimant_name || '',
-    claimantEmail: row?.claimant_email || '',
-    claimantPhone: row?.claimant_phone || '',
-    claimantCnpj: row?.claimant_cnpj || '',
-    restaurantName: row?.restaurant_name || place?.name || '',
-    restaurantAddress: row?.restaurant_address || place?.address || '',
-    source: place?.source || '',
-    sourceId: place?.source_id || '',
-    status: row?.status || 'pending',
-    notes: row?.notes || '',
-    rejectionReason: row?.rejection_reason || '',
-    reviewedAt: row?.reviewed_at || '',
-    createdAt: row?.created_at || nowIso()
-  };
+export async function fetchExternalPlacesFromDb() {
+  return null;
 }
 
 export async function claimExternalPlaceInDb(place, user, details = {}) {
   assertSignedIn(user);
-  const client = requireClient();
-  if (!client || !place?.source || !place?.sourceId) return null;
-  const { data: externalPlace, error: placeError } = await client
-    .from('external_places')
-    .select('id')
-    .eq('source', place.source)
-    .eq('source_id', place.sourceId)
-    .eq('status', 'active')
-    .maybeSingle();
-  throwIfError(placeError);
-  if (!externalPlace?.id) throw new Error('EXTERNAL_PLACE_NOT_SYNCED');
-  const { data: existingClaim, error: existingError } = await client
-    .from('external_place_claims')
-    .select('id,status')
-    .eq('external_place_id', externalPlace.id)
-    .eq('claimant_id', user.id)
-    .eq('status', 'pending')
-    .maybeSingle();
-  throwIfError(existingError);
-  if (existingClaim) return existingClaim;
-  const { data, error } = await client
-    .from('external_place_claims')
-    .insert({
-      external_place_id: externalPlace.id,
-      claimant_id: user.id,
-      claimant_name: String(details.claimantName || user.name || '').trim(),
-      claimant_email: String(user.email || '').trim() || null,
-      claimant_phone: String(details.claimantPhone || '').replace(/\D/g, ''),
-      claimant_cnpj: String(details.claimantCnpj || '').replace(/\D/g, ''),
-      restaurant_name: String(details.restaurantName || place.name || '').trim(),
-      restaurant_address: String(place.address || '').trim() || null,
-      status: 'pending',
-      notes: String(details.notes || '').trim() || null,
-      updated_at: nowIso()
-    })
-    .select('id,status,created_at')
-    .single();
-  throwIfError(error);
-  return data;
+  const claim = {
+    id: `claim-${Date.now()}`,
+    externalPlaceId: place?.id || `${place?.source || 'local'}-${place?.sourceId || Date.now()}`,
+    claimantId: user.id,
+    claimantName: String(details.claimantName || user.name || '').trim(),
+    claimantEmail: user.email || '',
+    claimantPhone: String(details.claimantPhone || '').replace(/\D/g, ''),
+    claimantCnpj: String(details.claimantCnpj || '').replace(/\D/g, ''),
+    restaurantName: String(details.restaurantName || place?.name || '').trim(),
+    restaurantAddress: String(place?.address || '').trim(),
+    source: place?.source || '',
+    sourceId: place?.sourceId || '',
+    status: 'pending',
+    notes: String(details.notes || '').trim(),
+    createdAt: nowIso()
+  };
+  await upsertListItem(storageKeys.externalClaims, claim);
+  return claim;
 }
 
 export async function fetchExternalPlaceClaimsFromDb() {
-  const client = requireClient();
-  if (!client) return null;
-  const { data, error } = await client
-    .from('external_place_claims')
-    .select('*, external_places(name,address,source,source_id)')
-    .order('created_at', { ascending: false })
-    .limit(250);
-  throwIfError(error);
-  return (data || []).map(normalizeExternalPlaceClaimFromDb);
+  return readList(storageKeys.externalClaims);
 }
 
 export async function updateExternalPlaceClaimStatusInDb(claimId, status, adminUser, rejectionReason = '') {
-  if (!claimId) return null;
   assertCanAdmin(adminUser);
-  const client = requireClient();
-  if (!client) return null;
+  const claims = await readList(storageKeys.externalClaims);
   const nextStatus = ['approved', 'rejected', 'cancelled'].includes(status) ? status : 'pending';
-  if (!['approved', 'rejected'].includes(nextStatus)) throw new Error('INVALID_CLAIM_STATUS');
-  const { error: reviewError } = await client.rpc('review_external_place_claim', {
-    target_claim_id: claimId,
-    decision: nextStatus,
-    reason: String(rejectionReason || '').trim() || null
-  });
-  throwIfError(reviewError);
-  const { data, error } = await client
-    .from('external_place_claims')
-    .select('*, external_places(name,address,source,source_id)')
-    .eq('id', claimId)
-    .single();
-  throwIfError(error);
-  return normalizeExternalPlaceClaimFromDb(data);
+  const nextClaims = claims.map((claim) => String(claim.id) === String(claimId)
+    ? { ...claim, status: nextStatus, rejectionReason, reviewedAt: nowIso(), reviewedBy: adminUser.id }
+    : claim);
+  await writeList(storageKeys.externalClaims, nextClaims);
+  return nextClaims.find((claim) => String(claim.id) === String(claimId)) || null;
 }
 
 export async function fetchOwnerRestaurantsFromDb(ownerId) {
-  const client = requireClient();
-  if (!client || !ownerId) return null;
-  const { data, error } = await client
-    .from('restaurants')
-    .select('*')
-    .eq('owner_legacy_id', String(ownerId))
-    .order('updated_at', { ascending: false });
-  throwIfError(error);
-  return (data || []).map(normalizeRestaurantFromDb);
+  if (!ownerId) return [];
+  const restaurants = await readList(storageKeys.restaurants);
+  return restaurants.filter((item) => String(item.ownerId || item.owner_id || '') === String(ownerId));
 }
 
 export async function fetchPendingRestaurantsFromDb() {
-  const client = requireClient();
-  if (!client) return null;
-  const { data, error } = await client
-    .from('restaurants')
-    .select('*')
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
-  throwIfError(error);
-  return (data || []).map(normalizeRestaurantFromDb);
+  const restaurants = await readList(storageKeys.restaurants);
+  return restaurants.filter((item) => String(item.status || 'published') === 'pending');
 }
 
 export async function fetchAllRestaurantsFromDb() {
-  const client = requireClient();
-  if (!client) return null;
-  const { data, error } = await client
-    .from('restaurants')
-    .select('*')
-    .order('updated_at', { ascending: false });
-  throwIfError(error);
-  return (data || []).map(normalizeRestaurantFromDb);
+  return readList(storageKeys.restaurants);
 }
 
 export async function seedRestaurantsIfEmpty(items, legacyNames = []) {
-  const client = requireClient();
-  if (!client) return;
-  const { data: existing, error } = await client.from('restaurants').select('legacy_id,name,app_payload').limit(500);
-  throwIfError(error);
-
+  const restaurants = await readList(storageKeys.restaurants);
   const legacyNameSet = new Set(legacyNames.map(normalizeText));
-  const hasOnlyLegacySeeds = existing?.length
+  const hasOnlyLegacySeeds = restaurants.length
     && legacyNameSet.size
-    && existing.every((item) => legacyNameSet.has(normalizeText(item.name || item.app_payload?.name)));
-  if (existing?.length && !hasOnlyLegacySeeds) return;
-
-  if (hasOnlyLegacySeeds) {
-    await Promise.all(existing.map((item) => (
-      client.from('restaurants').delete().eq('legacy_id', item.legacy_id)
-    )));
-  }
-
-  const rows = items.map((item) => ({
-    ...restaurantToDb({ ...item, status: item.status || 'published', metrics: item.metrics || { views: 0, mapsClicks: 0, whatsappClicks: 0, reservationClicks: 0 } }),
-    published_at: nowIso()
-  }));
-  const { error: upsertError } = await client.from('restaurants').upsert(rows, { onConflict: 'legacy_id' });
-  throwIfError(upsertError);
+    && restaurants.every((item) => legacyNameSet.has(normalizeText(item.name)));
+  if (restaurants.length && !hasOnlyLegacySeeds) return;
+  await writeList(storageKeys.restaurants, (items || []).map((item) => ({
+    ...item,
+    status: item.status || 'published',
+    metrics: item.metrics || { views: 0, mapsClicks: 0, whatsappClicks: 0, reservationClicks: 0 },
+    updatedAt: nowIso()
+  })));
 }
 
 export async function saveRestaurantToDb(item) {
   if (!item?.id) return;
-  await upsertByLegacyId('restaurants', restaurantToDb(item));
+  await upsertListItem(storageKeys.restaurants, item);
 }
 
 export async function createRestaurantInDb(item, user = null) {
   if (user) assertSignedIn(user);
-  await upsertByLegacyId('restaurants', {
-    ...restaurantToDb({ ...item, status: item?.status || 'pending' }, user),
-    submitted_at: nowIso()
+  await upsertListItem(storageKeys.restaurants, {
+    ...item,
+    ownerId: item?.ownerId || user?.id || 'local',
+    status: item?.status || 'pending',
+    submittedAt: nowIso()
   });
 }
 
 export async function updateRestaurantInDb(id, updates, user = null, currentRestaurant = null) {
   if (!id) return;
   if (user && currentRestaurant) assertCanManageRestaurant(user, currentRestaurant);
-  const merged = { ...(currentRestaurant || {}), ...updates, id };
-  await upsertByLegacyId('restaurants', restaurantToDb(merged, user));
+  const restaurants = await readList(storageKeys.restaurants);
+  await writeList(storageKeys.restaurants, restaurants.map((item) => (
+    String(item.id) === String(id) ? { ...item, ...updates, id, updatedAt: nowIso() } : item
+  )));
 }
 
 export async function updateRestaurantStatusInDb(id, status, reviewerId, reviewer = null) {
-  if (!id) return;
   if (reviewer) assertCanAdmin(reviewer);
-  const client = requireClient();
-  if (!client) return;
-  const { data: current, error: currentError } = await client.from('restaurants').select('*').eq('legacy_id', String(id)).maybeSingle();
-  throwIfError(currentError);
-  if (!current) return;
-  const nextPayload = {
-    ...(current.app_payload || {}),
-    status,
-    reviewedBy: reviewerId || null,
-    reviewedAt: nowIso()
-  };
-  const { error } = await client
-    .from('restaurants')
-    .update({
-      status: toRestaurantStatus(status),
-      reviewed_by_legacy_id: reviewerId || null,
-      reviewed_at: nowIso(),
-      app_payload: nextPayload,
-      updated_at: nowIso()
-    })
-    .eq('legacy_id', String(id));
-  throwIfError(error);
+  const restaurants = await readList(storageKeys.restaurants);
+  await writeList(storageKeys.restaurants, restaurants.map((item) => String(item.id) === String(id)
+    ? { ...item, status, reviewedBy: reviewerId || null, reviewedAt: nowIso(), updatedAt: nowIso() }
+    : item));
 }
 
 export async function claimRestaurantInDb(id, user) {
-  if (!id || !user?.id) return;
-  const client = requireClient();
-  if (!client) return;
-  const { data: current, error: currentError } = await client.from('restaurants').select('app_payload').eq('legacy_id', String(id)).maybeSingle();
-  throwIfError(currentError);
-  const nextPayload = {
-    ...(current?.app_payload || {}),
-    claim: {
-      status: 'pending',
-      userId: user.id,
-      name: user.name,
-      email: user.email,
-      requestedAt: nowIso()
-    }
-  };
-  const { error } = await client.from('restaurants').update({ app_payload: nextPayload, updated_at: nowIso() }).eq('legacy_id', String(id));
-  throwIfError(error);
+  assertSignedIn(user);
+  const restaurants = await readList(storageKeys.restaurants);
+  await writeList(storageKeys.restaurants, restaurants.map((item) => String(item.id) === String(id)
+    ? { ...item, claim: { status: 'pending', userId: user.id, name: user.name, email: user.email, requestedAt: nowIso() } }
+    : item));
 }
 
 export async function recordRestaurantMetricInDb(id, metric) {
-  const client = requireClient();
-  if (!client || !id || !metric) return;
-  const columnByMetric = {
-    views: 'views_count',
-    mapsClicks: 'maps_clicks_count',
-    whatsappClicks: 'whatsapp_clicks_count'
-  };
-  const column = columnByMetric[metric];
-  const { data: current, error: currentError } = await client.from('restaurants').select('*').eq('legacy_id', String(id)).maybeSingle();
-  throwIfError(currentError);
-  if (!current) return;
-  const payload = current.app_payload || {};
-  const nextMetrics = { ...(payload.metrics || {}), [metric]: Number(payload.metrics?.[metric] || 0) + 1 };
-  const update = { app_payload: { ...payload, metrics: nextMetrics }, updated_at: nowIso() };
-  if (column) update[column] = Number(current[column] || 0) + 1;
-  const { error } = await client.from('restaurants').update(update).eq('legacy_id', String(id));
-  throwIfError(error);
+  if (!id || !metric) return;
+  const restaurants = await readList(storageKeys.restaurants);
+  await writeList(storageKeys.restaurants, restaurants.map((item) => {
+    if (String(item.id) !== String(id)) return item;
+    const metrics = item.metrics || {};
+    return { ...item, metrics: { ...metrics, [metric]: Number(metrics[metric] || 0) + 1 } };
+  }));
 }
 
 export async function fetchReviewsFromDb(restaurantId) {
-  const client = requireClient();
-  if (!client || !restaurantId) return null;
-  const { data, error } = await client
-    .from('reviews')
-    .select('*')
-    .eq('restaurant_legacy_id', String(restaurantId))
-    .order('created_at', { ascending: false });
-  throwIfError(error);
-  return (data || []).map(normalizeReviewFromDb)
+  const reviews = await readList(storageKeys.reviews);
+  return reviews
+    .filter((review) => String(review.restaurantId) === String(restaurantId))
     .filter((review) => !['removed', 'deleted', 'rejected'].includes(String(review.status || '').toLowerCase()))
     .sort((a, b) => Number(b.pinned || false) - Number(a.pinned || false) || Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0));
 }
 
 export async function saveReviewToDb(review) {
   if (!review?.id) return;
-  const client = requireClient();
-  if (!client) return;
-  const { data: restaurant, error } = await client
-    .from('restaurants')
-    .select('id')
-    .eq('legacy_id', String(review.restaurantId))
-    .maybeSingle();
-  throwIfError(error);
-  if (!restaurant?.id) throw new Error('RESTAURANT_NOT_FOUND');
-  await upsertByLegacyId('reviews', reviewToDb(review, restaurant.id));
+  await upsertListItem(storageKeys.reviews, { ...review, updatedAt: nowIso() });
 }
 
 export async function createFeedPostInDb(post, user) {
-  if (!post?.id) return;
   assertSignedIn(user);
+  if (!post?.id) return;
   const photos = (post.images || post.photos || []).filter(Boolean).slice(0, 4);
   if (!post.caption || !photos.length) throw new Error('INVALID_POST');
-  await upsertByLegacyId('feed_posts', {
-    legacy_id: safeId(post.id),
-    author_legacy_id: user.id,
-    author_email: user.email || '',
-    status: post.status || 'published',
-    app_payload: cleanData({ ...post, images: photos, image: post.image || photos[0] }),
-    updated_at: nowIso()
+  await upsertListItem(storageKeys.feedPosts, {
+    ...post,
+    authorId: user.id,
+    userId: user.id,
+    author: post.author || user.name || 'Usuario Dine',
+    images: photos,
+    image: post.image || photos[0],
+    status: post.status || 'published'
   });
+}
+
+export async function createStoryInDb(story, user) {
+  assertSignedIn(user);
+  if (!story?.id || !story.image || !story.expiresAt) throw new Error('INVALID_STORY');
+  await upsertListItem(storageKeys.stories, {
+    ...story,
+    authorId: user.id,
+    authorName: story.authorName || user.name || 'Usuario Dine',
+    authorAvatar: story.authorAvatar || user.photo || '',
+    status: 'published'
+  });
+}
+
+export async function fetchStoriesFromDb(viewerId = '') {
+  const stories = (await readList(storageKeys.stories))
+    .filter((story) => String(story.status || 'published') === 'published')
+    .filter((story) => !story.expiresAt || new Date(story.expiresAt).getTime() > Date.now());
+  const viewedIds = viewerId ? await readList(storageKeys.storyViews) : [];
+  const interactions = await readJson(storageKeys.storyInteractions, {});
+  return { stories, viewedIds, interactions };
+}
+
+export async function markStoryViewedInDb(storyId, user) {
+  if (!storyId || !user?.id) return;
+  const viewedIds = await readList(storageKeys.storyViews);
+  await writeList(storageKeys.storyViews, Array.from(new Set([...viewedIds, String(storyId)])));
+}
+
+export async function saveStoryLikeInDb(storyId, active, user) {
+  assertSignedIn(user);
+  const interactions = await readJson(storageKeys.storyInteractions, {});
+  const current = interactions[storyId] || { liked: false, replies: [], forwardedTo: [] };
+  await writeJson(storageKeys.storyInteractions, { ...interactions, [storyId]: { ...current, liked: Boolean(active) } });
+}
+
+export async function createStoryReplyInDb(storyId, message, user) {
+  assertSignedIn(user);
+  const text = String(message || '').trim();
+  if (!storyId || !text) return;
+  const interactions = await readJson(storageKeys.storyInteractions, {});
+  const current = interactions[storyId] || { liked: false, replies: [], forwardedTo: [] };
+  await writeJson(storageKeys.storyInteractions, { ...interactions, [storyId]: { ...current, replies: [...(current.replies || []), text] } });
+}
+
+export async function forwardStoryInDb(storyId, recipientId, user) {
+  assertSignedIn(user);
+  if (!storyId || !recipientId) return;
+  const interactions = await readJson(storageKeys.storyInteractions, {});
+  const current = interactions[storyId] || { liked: false, replies: [], forwardedTo: [] };
+  await writeJson(storageKeys.storyInteractions, {
+    ...interactions,
+    [storyId]: { ...current, forwardedTo: Array.from(new Set([...(current.forwardedTo || []), String(recipientId)])) }
+  });
+}
+
+export async function fetchStoryRecipientsFromDb(userId) {
+  const profiles = await readList(storageKeys.profiles);
+  return profiles.filter((profile) => String(profile.id) !== String(userId)).slice(0, 40);
 }
 
 export async function fetchFeedDataFromDb(userId = '') {
-  const client = requireClient();
-  if (!client) return null;
-
-  const { data: postRows, error: postsError } = await client
-    .from('feed_posts')
-    .select('*')
-    .eq('status', 'published')
-    .order('created_at', { ascending: false })
-    .limit(100);
-  throwIfError(postsError);
-
-  const postIds = (postRows || []).map((row) => row.legacy_id).filter(Boolean);
-  if (!postIds.length) return { posts: [], reactions: {} };
-
-  const [{ data: commentRows, error: commentsError }, { data: reactionRows, error: reactionsError }] = await Promise.all([
-    client.from('feed_comments').select('*').in('post_legacy_id', postIds).eq('status', 'published').order('created_at', { ascending: true }),
-    client.from('feed_reactions').select('*').in('post_legacy_id', postIds).eq('active', true)
-  ]);
-  throwIfError(commentsError);
-  throwIfError(reactionsError);
-
-  const commentsByPost = (commentRows || []).reduce((result, row) => {
-    const comment = {
-      ...(row.app_payload || {}),
-      id: row.legacy_id,
-      author: row.author_name || row.app_payload?.author || 'Usuario Dine',
-      userId: row.author_legacy_id,
-      createdAt: row.created_at
-    };
-    result[row.post_legacy_id] = [...(result[row.post_legacy_id] || []), comment];
-    return result;
-  }, {});
-
-  const reactionCounts = {};
-  const reactions = {};
-  (reactionRows || []).forEach((row) => {
-    const postId = row.post_legacy_id;
-    const reaction = row.reaction;
-    reactionCounts[postId] = reactionCounts[postId] || {};
-    reactionCounts[postId][reaction] = (reactionCounts[postId][reaction] || 0) + 1;
-    if (userId && String(row.user_legacy_id) === String(userId)) {
-      reactions[postId] = { ...(reactions[postId] || {}), [reaction]: true };
-    }
-  });
-
-  const posts = (postRows || []).map((row) => {
-    const payload = row.app_payload || {};
-    const ownLike = reactions[row.legacy_id]?.liked ? 1 : 0;
-    const ownRepost = reactions[row.legacy_id]?.reposted ? 1 : 0;
-    return {
-      ...payload,
-      id: row.legacy_id,
-      authorId: row.author_legacy_id || payload.authorId,
-      createdAt: payload.createdAt || row.created_at,
-      comments: commentsByPost[row.legacy_id] || payload.comments || [],
-      likes: Number(payload.likes || 0) + Math.max(0, Number(reactionCounts[row.legacy_id]?.liked || 0) - ownLike),
-      reposts: Number(payload.reposts || 0) + Math.max(0, Number(reactionCounts[row.legacy_id]?.reposted || 0) - ownRepost)
-    };
-  });
-
-  return { posts, reactions };
+  const posts = (await readList(storageKeys.feedPosts)).filter((post) => String(post.status || 'published') === 'published');
+  const reactions = await readJson(storageKeys.feedReactions, {});
+  return { posts, reactions: userId ? reactions : {} };
 }
 
 export async function deleteFeedPostInDb(postId, user) {
-  if (!postId) return;
   assertSignedIn(user);
-  const client = requireClient();
-  if (!client) return;
-  const { error } = await client
-    .from('feed_posts')
-    .update({ status: 'deleted', updated_at: nowIso() })
-    .eq('legacy_id', String(postId))
-    .eq('author_legacy_id', String(user.id));
-  throwIfError(error);
+  const posts = await readList(storageKeys.feedPosts);
+  await writeList(storageKeys.feedPosts, posts.map((post) => (
+    String(post.id) === String(postId) && String(post.authorId) === String(user.id)
+      ? { ...post, status: 'deleted', updatedAt: nowIso() }
+      : post
+  )));
 }
 
 export async function addFeedCommentToDb(postId, comment, user) {
-  if (!postId || !comment?.id) return;
   assertSignedIn(user);
-  await upsertByLegacyId('feed_comments', {
-    legacy_id: safeId(comment.id),
-    post_legacy_id: String(postId),
-    author_legacy_id: user.id,
-    author_name: user.name || comment.author || '',
-    status: 'published',
-    app_payload: cleanData(comment),
-    updated_at: nowIso()
-  });
+  if (!postId || !comment?.id) return;
+  const posts = await readList(storageKeys.feedPosts);
+  await writeList(storageKeys.feedPosts, posts.map((post) => String(post.id) === String(postId)
+    ? { ...post, comments: [...(post.comments || []), { ...comment, userId: user.id, author: comment.author || user.name || 'Usuario Dine' }] }
+    : post));
 }
 
 export async function setFeedReactionInDb(postId, reaction, active, user) {
-  if (!postId || !reaction) return;
   assertSignedIn(user);
-  const reactionId = `${postId}_${user.id}_${reaction}`;
-  await upsertByLegacyId('feed_reactions', {
-    legacy_id: reactionId,
-    post_legacy_id: String(postId),
-    user_legacy_id: user.id,
-    reaction,
-    active: Boolean(active),
-    updated_at: nowIso()
-  });
-}
-
-function normalizeAppNotification(row) {
-  const payload = row?.app_payload || {};
-  return {
-    ...payload,
-    id: row?.legacy_id || payload.id,
-    userId: row?.user_legacy_id || payload.userId,
-    actorId: row?.actor_legacy_id || payload.actorId,
-    type: row?.type || payload.type || 'activity',
-    status: row?.status || payload.status || 'unread',
-    targetId: row?.target_legacy_id || payload.targetId || '',
-    createdAt: payload.createdAt || row?.created_at || nowIso()
-  };
+  if (!postId || !reaction) return;
+  const reactions = await readJson(storageKeys.feedReactions, {});
+  const current = reactions[postId] || {};
+  await writeJson(storageKeys.feedReactions, { ...reactions, [postId]: { ...current, [reaction]: Boolean(active) } });
 }
 
 export async function fetchSocialStateFromDb(userId) {
-  const client = requireClient();
-  if (!client || !userId) return null;
-  const [
-    { data: followRows, error: followsError },
-    { count: followers, error: followersError },
-    { data: notificationRows, error: notificationsError }
-  ] = await Promise.all([
-    client
-      .from('social_follows')
-      .select('*')
-      .eq('follower_legacy_id', String(userId))
-      .eq('active', true)
-      .order('updated_at', { ascending: false }),
-    client
-      .from('social_follows')
-      .select('*', { count: 'exact', head: true })
-      .eq('target_legacy_id', String(userId))
-      .eq('active', true),
-    client
-      .from('app_notifications')
-      .select('*')
-      .eq('user_legacy_id', String(userId))
-      .order('created_at', { ascending: false })
-      .limit(60)
-  ]);
-  throwIfError(followsError);
-  throwIfError(followersError);
-  throwIfError(notificationsError);
+  if (!userId) return null;
+  const follows = (await readList(storageKeys.follows)).filter((item) => item.active);
+  const notifications = await readList(storageKeys.notifications);
+  const followingRows = follows.filter((item) => String(item.followerId) === String(userId));
+  const followers = follows.filter((item) => String(item.targetId) === String(userId)).length;
   return {
-    followingProfiles: (followRows || []).map((row) => ({
-      ...(row.target_snapshot || {}),
-      id: row.target_legacy_id,
-      followedAt: row.created_at
-    })),
-    followers: Number(followers || 0),
-    following: (followRows || []).length,
-    notifications: (notificationRows || []).map(normalizeAppNotification)
+    followingProfiles: followingRows.map((item) => ({ ...(item.targetSnapshot || {}), id: item.targetId, followedAt: item.createdAt })),
+    followers,
+    following: followingRows.length,
+    notifications: notifications.filter((item) => String(item.userId) === String(userId)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
   };
 }
 
 export async function fetchProfileSocialStatsFromDb(profileId) {
-  const client = requireClient();
-  if (!client || !profileId) return null;
-  const id = String(profileId);
-  const [
-    { data: profileRow, error: profileError },
-    { count: followers, error: followersError },
-    { count: following, error: followingError }
-  ] = await Promise.all([
-    client.from('app_profiles').select('*').eq('legacy_id', id).maybeSingle(),
-    client.from('social_follows').select('*', { count: 'exact', head: true }).eq('target_legacy_id', id).eq('active', true),
-    client.from('social_follows').select('*', { count: 'exact', head: true }).eq('follower_legacy_id', id).eq('active', true)
-  ]);
-  throwIfError(profileError);
-  throwIfError(followersError);
-  throwIfError(followingError);
-  const payload = profileRow?.app_payload || {};
+  if (!profileId) return null;
+  const profiles = await readList(storageKeys.profiles);
+  const follows = (await readList(storageKeys.follows)).filter((item) => item.active);
   return {
-    profile: profileRow ? {
-      ...payload,
-      id,
-      name: profileRow.full_name || payload.name || '',
-      instagram: profileRow.instagram || payload.instagram || '',
-      avatar: profileRow.photo_url || payload.photo || payload.avatar || '',
-      bio: profileRow.bio || payload.bio || '',
-      location: profileRow.location || payload.location || ''
-    } : null,
-    followers: Number(followers || 0),
-    following: Number(following || 0)
+    profile: profiles.find((profile) => String(profile.id) === String(profileId)) || null,
+    followers: follows.filter((item) => String(item.targetId) === String(profileId)).length,
+    following: follows.filter((item) => String(item.followerId) === String(profileId)).length
   };
 }
 
@@ -942,491 +535,271 @@ export async function setProfileFollowInDb(user, profile, active) {
   assertSignedIn(user);
   const targetId = String(profile?.id || '').trim();
   if (!targetId || targetId === String(user.id)) return;
-  await upsertByLegacyId('social_follows', {
-    legacy_id: `${user.id}_${targetId}`,
-    follower_legacy_id: String(user.id),
-    target_legacy_id: targetId,
+  await upsertListItem(storageKeys.follows, {
+    id: `${user.id}_${targetId}`,
+    followerId: String(user.id),
+    targetId,
     active: Boolean(active),
-    target_snapshot: cleanData({
-      id: targetId,
-      name: profile.name || '',
-      handle: profile.handle || '',
-      avatar: profile.avatar || '',
-      bio: profile.bio || '',
-      instagram: profile.instagram || ''
-    }),
-    updated_at: nowIso()
+    targetSnapshot: cleanData(profile),
+    createdAt: nowIso()
   });
-  if (active) {
-    await createAppNotificationInDb({
-      userId: targetId,
-      actorId: String(user.id),
-      actorName: user.name || 'Alguém',
-      actorAvatar: user.photo || '',
-      type: 'follow',
-      message: 'começou a seguir você.',
-      targetId: String(user.id),
-      targetProfile: {
-        id: String(user.id),
-        name: user.name || '',
-        handle: user.handle || '',
-        avatar: user.photo || '',
-        bio: user.bio || '',
-        instagram: user.instagram || ''
-      }
-    });
-  }
 }
 
 export async function createAppNotificationInDb(notification) {
   if (!notification?.userId || !notification?.type) return;
   const createdAt = notification.createdAt || nowIso();
-  const id = notification.id || `${notification.userId}_${notification.type}_${notification.actorId || 'dine'}_${notification.targetId || Date.now()}_${Date.now()}`;
-  await upsertByLegacyId('app_notifications', {
-    legacy_id: id,
-    user_legacy_id: String(notification.userId),
-    actor_legacy_id: notification.actorId ? String(notification.actorId) : null,
-    type: notification.type,
+  await upsertListItem(storageKeys.notifications, cleanData({
+    ...notification,
+    id: notification.id || `${notification.userId}_${notification.type}_${notification.actorId || 'dine'}_${notification.targetId || Date.now()}_${Date.now()}`,
     status: notification.status || 'unread',
-    target_legacy_id: notification.targetId ? String(notification.targetId) : null,
-    app_payload: cleanData({ ...notification, id, createdAt }),
-    updated_at: nowIso()
-  });
+    createdAt
+  }));
 }
 
 export async function markAppNotificationsReadInDb(userId, notificationIds = []) {
-  const client = requireClient();
-  if (!client || !userId) return;
-  let query = client
-    .from('app_notifications')
-    .update({ status: 'read', updated_at: nowIso() })
-    .eq('user_legacy_id', String(userId))
-    .eq('status', 'unread');
-  if (notificationIds.length) query = query.in('legacy_id', notificationIds.map(String));
-  const { error } = await query;
-  throwIfError(error);
+  const ids = new Set(notificationIds.map(String));
+  const notifications = await readList(storageKeys.notifications);
+  await writeList(storageKeys.notifications, notifications.map((item) => (
+    String(item.userId) === String(userId) && (!ids.size || ids.has(String(item.id)))
+      ? { ...item, status: 'read', updatedAt: nowIso() }
+      : item
+  )));
 }
 
 export async function reportContentInDb(report, user) {
-  if (!report?.targetId || !report?.targetType) return;
   assertSignedIn(user);
-  const id = report.id || `${report.targetType}-${report.targetId}-${user.id}-${Date.now()}`;
-  await upsertByLegacyId('moderation_reports', {
-    legacy_id: id,
-    target_type: report.targetType,
-    target_legacy_id: String(report.targetId),
-    reporter_legacy_id: user.id,
-    reporter_email: user.email || '',
-    status: 'open',
-    app_payload: cleanData(report),
-    updated_at: nowIso()
+  if (!report?.targetId || !report?.targetType) return;
+  await upsertListItem(storageKeys.reports, {
+    ...report,
+    id: report.id || `${report.targetType}-${report.targetId}-${user.id}-${Date.now()}`,
+    reporterId: user.id,
+    reporterEmail: user.email || '',
+    status: 'open'
   });
 }
 
 export async function updateModerationStatusInDb(reportId, updates, adminUser) {
-  if (!reportId) return;
   assertCanAdmin(adminUser);
-  await upsertByLegacyId('moderation_reports', {
-    legacy_id: String(reportId),
-    reviewed_by_legacy_id: adminUser.id,
-    reviewed_at: nowIso(),
-    status: updates?.status || 'reviewed',
-    app_payload: cleanData(updates),
-    updated_at: nowIso()
+  await upsertListItem(storageKeys.reports, {
+    ...(updates || {}),
+    id: String(reportId),
+    reviewedBy: adminUser.id,
+    reviewedAt: nowIso(),
+    status: updates?.status || 'reviewed'
   });
 }
 
 export async function blockAccountInDb(user, blockedUserId, note = '') {
-  if (!blockedUserId) return;
   assertSignedIn(user);
-  await upsertByLegacyId('user_blocks', {
-    legacy_id: `${user.id}_${blockedUserId}`,
-    user_legacy_id: user.id,
-    blocked_user_legacy_id: String(blockedUserId),
+  if (!blockedUserId) return;
+  await upsertListItem(storageKeys.blocks, {
+    id: `${user.id}_${blockedUserId}`,
+    userId: user.id,
+    blockedUserId: String(blockedUserId),
     note,
-    created_at: nowIso()
+    createdAt: nowIso()
   });
 }
 
 export async function createInviteLinkInDb(user) {
   assertSignedIn(user);
   const code = normalizeText(`${user.name || 'dine'}-${user.id}`).replace(/[^a-z0-9]/g, '').slice(0, 16) || String(user.id);
-  const id = `${user.id}_${code}`;
-  const publicAppUrl = String(
-    process.env.EXPO_PUBLIC_APP_URL
-    || (typeof window !== 'undefined' ? window.location.origin : '')
-  ).replace(/\/+$/, '');
-  const link = publicAppUrl ? `${publicAppUrl}/invite/${code}` : '';
-  await upsertByLegacyId('invites', {
-    legacy_id: id,
-    code,
-    link,
-    owner_legacy_id: user.id,
-    owner_email: user.email || '',
-    uses: 0,
-    status: 'active',
-    updated_at: nowIso()
-  });
-  return { id, code, link };
+  const publicAppUrl = String(process.env.EXPO_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/+$/, '');
+  const invite = { id: `${user.id}_${code}`, code, link: publicAppUrl ? `${publicAppUrl}/invite/${code}` : '', ownerId: user.id, uses: 0, status: 'active' };
+  await upsertListItem(storageKeys.invites, invite);
+  return invite;
 }
 
 export async function redeemInviteInDb(code, user) {
-  const client = requireClient();
-  if (!client || !code) return;
   assertSignedIn(user);
+  const invites = await readList(storageKeys.invites);
   const normalizedCode = normalizeText(code).replace(/[^a-z0-9]/g, '');
-  const { data: invite, error } = await client.from('invites').select('*').eq('code', normalizedCode).limit(1).maybeSingle();
-  throwIfError(error);
+  const invite = invites.find((item) => item.code === normalizedCode);
   if (!invite) throw new Error('INVITE_NOT_FOUND');
-  await insertAppRow('invite_redemptions', {
-    invite_legacy_id: invite.legacy_id,
-    code: normalizedCode,
-    invited_user_legacy_id: user.id,
-    invited_user_email: user.email || ''
-  });
-  await client.from('invites').update({ uses: Number(invite.uses || 0) + 1, updated_at: nowIso() }).eq('legacy_id', invite.legacy_id);
+  await upsertListItem(storageKeys.inviteRedemptions, { id: `${invite.id}_${user.id}`, inviteId: invite.id, code: normalizedCode, userId: user.id });
+  await writeList(storageKeys.invites, invites.map((item) => item.id === invite.id ? { ...item, uses: Number(item.uses || 0) + 1 } : item));
 }
 
 export async function registerPushTokenInDb(user, token, device = {}) {
-  if (!token) return;
   assertSignedIn(user);
-  await upsertByLegacyId('push_tokens', {
-    legacy_id: `${user.id}_${String(token).replace(/[^\w-]/g, '_')}`,
-    user_legacy_id: user.id,
-    token,
-    platform: device.platform || '',
-    device_name: device.name || '',
-    enabled: true,
-    updated_at: nowIso()
-  });
+  if (!token) return;
+  await upsertListItem(storageKeys.pushTokens, { id: `${user.id}_${String(token).replace(/[^\w-]/g, '_')}`, userId: user.id, token, device, enabled: true });
 }
 
 export async function queuePushNotificationInDb(notification) {
   if (!notification?.userId) return;
-  const id = notification.id || `${notification.userId}_${Date.now()}`;
-  await upsertByLegacyId('notification_queue', {
-    legacy_id: id,
-    user_legacy_id: notification.userId,
-    status: 'queued',
-    app_payload: cleanData(notification),
-    updated_at: nowIso()
-  });
+  await upsertListItem(storageKeys.notificationQueue, { ...notification, id: notification.id || `${notification.userId}_${Date.now()}`, status: 'queued' });
 }
 
 export async function searchRestaurantsInDb({ term = '', city = '', category = '', take = 30 } = {}) {
-  const client = requireClient();
-  if (!client) return null;
-  const { data, error } = await client
-    .from('restaurants')
-    .select('*')
-    .eq('status', 'published')
-    .order('rating', { ascending: false })
-    .limit(Math.min(Number(take) || 30, 50));
-  throwIfError(error);
+  const restaurants = await fetchRestaurantsFromDb();
   const normalizedTerm = normalizeText(term);
   const normalizedCity = normalizeText(city);
   const normalizedCategory = normalizeText(category);
-  return (data || [])
-    .map(normalizeRestaurantFromDb)
+  return restaurants
+    .filter((item) => String(item.status || 'published') === 'published')
     .filter((item) => {
-      const haystack = normalizeText([
-        item.name,
-        item.type,
-        item.district,
-        item.city,
-        item.address,
-        item.description,
-        ...(item.tags || []),
-        ...(item.highlights || [])
-      ].join(' '));
+      const haystack = normalizeText([item.name, item.type, item.district, item.city, item.address, item.description, ...(item.tags || []), ...(item.highlights || [])].join(' '));
       return (!normalizedTerm || haystack.includes(normalizedTerm))
         && (!normalizedCity || haystack.includes(normalizedCity))
         && (!normalizedCategory || haystack.includes(normalizedCategory));
-    });
+    })
+    .slice(0, Math.min(Number(take) || 30, 50));
 }
 
 export async function updateReviewInDb(id, updates) {
-  const client = requireClient();
-  if (!client || !id) return;
-  const { data: current, error: currentError } = await client.from('reviews').select('app_payload').eq('legacy_id', String(id)).maybeSingle();
-  throwIfError(currentError);
-  const nextPayload = { ...(current?.app_payload || {}), ...updates };
-  const update = { app_payload: nextPayload, updated_at: nowIso() };
-  if (updates?.status) update.status = updates.status;
-  const { error } = await client.from('reviews').update(update).eq('legacy_id', String(id));
-  throwIfError(error);
+  if (!id) return;
+  const reviews = await readList(storageKeys.reviews);
+  await writeList(storageKeys.reviews, reviews.map((review) => String(review.id) === String(id) ? { ...review, ...updates, updatedAt: nowIso() } : review));
 }
 
 export async function fetchFavoritesFromDb(userId) {
-  const client = requireClient();
-  if (!client || !userId) return null;
-  const { data, error } = await client.from('app_favorites').select('items').eq('user_legacy_id', String(userId)).maybeSingle();
-  throwIfError(error);
-  return data?.items || [];
+  if (!userId) return [];
+  const scoped = await readJson(`${storageKeys.favorites}:${userId}`, null);
+  return scoped || readJson(storageKeys.favorites, []);
 }
 
 export async function saveFavoritesToDb(userId, items) {
   if (!userId) return;
-  await upsertByLegacyId('app_favorites', {
-    legacy_id: String(userId),
-    user_legacy_id: String(userId),
-    items: items || [],
-    updated_at: nowIso()
-  });
+  await writeJson(`${storageKeys.favorites}:${userId}`, items || []);
+  await writeJson(storageKeys.favorites, items || []);
 }
 
 export async function saveUserProfileToDb(user) {
   if (!user?.id) return;
-  await upsertByLegacyId('app_profiles', {
-    legacy_id: String(user.id),
-    full_name: user.name,
-    email: user.email,
-    account_type: user.accountType === 'restaurant_owner' ? 'restaurant_owner' : 'user',
-    instagram: user.instagram || '',
-    photo_url: user.photo || '',
-    bio: user.bio || '',
-    location: user.location || '',
-    preferences: user.preferences || [],
-    gamification: user.gamification || null,
-    app_payload: cleanData(user),
-    updated_at: nowIso()
+  const account = await getBrowserAccount();
+  if (account && String(account.id) === String(user.id)) {
+    await saveBrowserAccount({ ...account, ...user, password: account.password });
+  }
+  await upsertListItem(storageKeys.profiles, {
+    ...stripPassword(user),
+    id: String(user.id),
+    accountType: normalizeAccountType(user.accountType)
   });
 }
 
-function normalizeReservationRow(row) {
-  const payload = row?.app_payload || {};
-  return {
-    ...payload,
-    id: row?.legacy_id || payload.id,
-    restaurantId: row?.restaurant_legacy_id || payload.restaurantId,
-    userId: row?.user_legacy_id || payload.userId,
-    date: row?.reservation_date || payload.date,
-    time: row?.reservation_time?.slice?.(0, 5) || payload.time,
-    partySize: Number(row?.party_size || payload.partySize || 1),
-    status: row?.status || payload.status || 'pending',
-    createdAt: row?.created_at || payload.createdAt
-  };
-}
-
-function normalizeWaitlistRow(row) {
-  const payload = row?.app_payload || {};
-  return {
-    ...payload,
-    id: row?.legacy_id || payload.id,
-    restaurantId: row?.restaurant_legacy_id || payload.restaurantId,
-    userId: row?.user_legacy_id || payload.userId,
-    date: row?.requested_date || payload.date,
-    time: row?.preferred_time?.slice?.(0, 5) || payload.time,
-    partySize: Number(row?.party_size || payload.partySize || 1),
-    status: row?.status || payload.status || 'waiting',
-    createdAt: row?.created_at || payload.createdAt
-  };
-}
-
 export async function fetchReservationStateFromDb({ userId = '', restaurantIds = [] } = {}) {
-  const client = requireClient();
-  if (!client || (!userId && !restaurantIds.length)) return null;
-  const reservationQueries = [];
-  const waitlistQueries = [];
-  if (userId) {
-    reservationQueries.push(client.from('app_reservations').select('*').eq('user_legacy_id', String(userId)).limit(300));
-    waitlistQueries.push(client.from('app_waitlist_entries').select('*').eq('user_legacy_id', String(userId)).limit(300));
-  }
-  if (restaurantIds.length) {
-    const ids = restaurantIds.map(String);
-    reservationQueries.push(client.from('app_reservations').select('*').in('restaurant_legacy_id', ids).limit(500));
-    waitlistQueries.push(client.from('app_waitlist_entries').select('*').in('restaurant_legacy_id', ids).limit(500));
-  }
-  const [reservationResults, waitlistResults] = await Promise.all([
-    Promise.all(reservationQueries),
-    Promise.all(waitlistQueries)
-  ]);
-  reservationResults.forEach(({ error }) => throwIfError(error));
-  waitlistResults.forEach(({ error }) => throwIfError(error));
-  const reservations = reservationResults
-    .flatMap(({ data }) => data || [])
-    .map(normalizeReservationRow)
-    .reduce((items, item) => items.some((existing) => existing.id === item.id) ? items : [...items, item], []);
-  const waitlist = waitlistResults
-    .flatMap(({ data }) => data || [])
-    .map(normalizeWaitlistRow)
-    .reduce((items, item) => items.some((existing) => existing.id === item.id) ? items : [...items, item], []);
+  const ids = new Set((restaurantIds || []).map(String));
+  const reservations = (await readList(storageKeys.reservations)).filter((item) => (
+    (userId && String(item.userId) === String(userId)) || (ids.size && ids.has(String(item.restaurantId)))
+  ));
+  const waitlist = (await readList(storageKeys.waitlist)).filter((item) => (
+    (userId && String(item.userId) === String(userId)) || (ids.size && ids.has(String(item.restaurantId)))
+  ));
   return { reservations, waitlist };
 }
 
 export async function saveReservationToDb(reservation) {
-  if (!reservation?.id) return;
-  if (supabaseAuthEnabled) {
-    const client = requireClient();
-    const { data, error } = await client.rpc('create_reservation_secure', {
-      p_restaurant_legacy_id: String(reservation.restaurantId),
-      p_reservation_date: reservation.date,
-      p_reservation_time: reservation.time,
-      p_party_size: Number(reservation.partySize || 1),
-      p_payload: cleanData(reservation),
-      p_idempotency_key: String(reservation.id)
-    });
-    throwIfError(error);
-    const row = Array.isArray(data) ? data[0] : data;
-    if (!row) throw new Error('RESERVATION_NOT_CREATED');
-    return normalizeReservationRow(row);
-  }
-  // Legacy/local mode intentionally stays on-device after backend hardening.
-  // Anonymous reservation writes are no longer sent to Supabase.
-  return reservation;
+  if (!reservation?.id) return null;
+  return upsertListItem(storageKeys.reservations, reservation);
 }
 
 export async function updateReservationStatusSecureInDb(reservationId, status) {
   if (!reservationId) return null;
-  if (!supabaseAuthEnabled) return null;
-  const client = requireClient();
-  const { data, error } = await client.rpc('update_reservation_status_secure', {
-    p_legacy_id: String(reservationId),
-    p_status: String(status)
-  });
-  throwIfError(error);
-  const row = Array.isArray(data) ? data[0] : data;
-  return row ? normalizeReservationRow(row) : null;
+  const reservations = await readList(storageKeys.reservations);
+  let updated = null;
+  await writeList(storageKeys.reservations, reservations.map((item) => {
+    if (String(item.id) !== String(reservationId)) return item;
+    updated = { ...item, status, updatedAt: nowIso() };
+    return updated;
+  }));
+  return updated;
 }
 
 export async function saveWaitlistEntryToDb(entry) {
-  if (!entry?.id) return;
-  await upsertByLegacyId('app_waitlist_entries', {
-    legacy_id: String(entry.id),
-    restaurant_legacy_id: String(entry.restaurantId),
-    user_legacy_id: String(entry.userId),
-    requested_date: entry.date,
-    preferred_time: entry.time || null,
-    party_size: Number(entry.partySize || 1),
-    status: entry.status || 'waiting',
-    app_payload: cleanData(entry),
-    updated_at: nowIso()
-  });
-}
-
-function normalizeDineMatchGroup(row) {
-  if (!row) return null;
-  return {
-    id: row.id,
-    inviteCode: row.invite_code || '',
-    hostId: row.host_id || '',
-    title: row.title || 'Nosso Dine Match',
-    status: row.status || 'active',
-    preferences: row.preferences || {},
-    restaurantIds: row.restaurant_legacy_ids || [],
-    winnerRestaurantId: row.winner_restaurant_legacy_id || '',
-    maxParticipants: Number(row.max_participants || 8),
-    expiresAt: row.expires_at || '',
-    createdAt: row.created_at || nowIso(),
-    participants: (row.dine_match_participants || []).map((participant) => ({
-      id: participant.id,
-      userId: participant.user_id,
-      displayName: participant.display_name || 'Participante',
-      preferences: participant.preferences || {},
-      joinedAt: participant.joined_at || ''
-    })),
-    votes: (row.dine_match_votes || []).map((vote) => ({
-      id: vote.id,
-      userId: vote.user_id,
-      restaurantId: vote.restaurant_legacy_id,
-      value: Number(vote.value || 0),
-      updatedAt: vote.updated_at || vote.created_at || ''
-    }))
-  };
+  if (!entry?.id) return null;
+  return upsertListItem(storageKeys.waitlist, entry);
 }
 
 export async function fetchDineMatchGroupFromDb(groupId) {
-  const client = requireClient();
-  if (!client || !groupId || !supabaseAuthEnabled) return null;
-  const { data, error } = await client
-    .from('dine_match_groups')
-    .select('*, dine_match_participants(*), dine_match_votes(*)')
-    .eq('id', groupId)
-    .single();
-  throwIfError(error);
-  return normalizeDineMatchGroup(data);
+  if (!groupId) return null;
+  const groups = await readList(storageKeys.dineMatchGroups);
+  return groups.find((group) => String(group.id) === String(groupId) || String(group.inviteCode) === String(groupId).toUpperCase()) || null;
 }
 
 export async function createDineMatchGroupInDb({ preferences = {}, restaurantIds = [] } = {}, user) {
   assertSignedIn(user);
-  if (!supabaseAuthEnabled) return null;
-  const client = requireClient();
-  const { data: groupId, error } = await client.rpc('create_dine_match_group', {
-    group_preferences: cleanData(preferences),
-    candidate_restaurant_ids: restaurantIds.map(String),
-    participant_name: String(user.name || 'Anfitrião').trim(),
-    participant_limit: Math.max(2, Math.min(20, Number(preferences.participants || 8)))
-  });
-  throwIfError(error);
-  return fetchDineMatchGroupFromDb(groupId);
+  const createdAt = nowIso();
+  const group = {
+    id: `local-match-${Date.now()}`,
+    inviteCode: Math.random().toString(36).slice(2, 8).toUpperCase(),
+    hostId: user.id,
+    title: 'Nosso Dine Match',
+    status: 'active',
+    preferences: { ...preferences },
+    restaurantIds: [...restaurantIds],
+    winnerRestaurantId: '',
+    maxParticipants: Number(preferences?.participants || 8),
+    participants: [{ id: `local-participant-${user.id}`, userId: user.id, displayName: user.name || 'Voce', preferences: { ...preferences }, joinedAt: createdAt }],
+    votes: [],
+    createdAt
+  };
+  await upsertListItem(storageKeys.dineMatchGroups, group);
+  return group;
 }
 
 export async function joinDineMatchGroupInDb(inviteCode, user, preferences = {}) {
   assertSignedIn(user);
-  if (!supabaseAuthEnabled) return null;
-  const client = requireClient();
-  const { data: groupId, error } = await client.rpc('join_dine_match_group', {
-    target_invite_code: String(inviteCode || '').trim().toUpperCase(),
-    participant_name: String(user.name || 'Participante').trim(),
-    participant_preferences: cleanData(preferences)
-  });
-  throwIfError(error);
-  return fetchDineMatchGroupFromDb(groupId);
+  const code = String(inviteCode || '').trim().toUpperCase();
+  const groups = await readList(storageKeys.dineMatchGroups);
+  const group = groups.find((item) => item.inviteCode === code);
+  if (!group) return null;
+  const participants = (group.participants || []).some((item) => String(item.userId) === String(user.id))
+    ? group.participants
+    : [...(group.participants || []), { id: `local-participant-${user.id}`, userId: user.id, displayName: user.name || 'Participante', preferences: cleanData(preferences), joinedAt: nowIso() }];
+  const nextGroup = { ...group, participants };
+  await upsertListItem(storageKeys.dineMatchGroups, nextGroup);
+  return nextGroup;
 }
 
 export async function saveDineMatchVoteInDb(groupId, restaurantId, value, user) {
   assertSignedIn(user);
-  if (!supabaseAuthEnabled) return null;
-  const client = requireClient();
-  if (value !== 1 && value !== -1) {
-    const { error } = await client.from('dine_match_votes').delete()
-      .eq('group_id', groupId)
-      .eq('user_id', user.id)
-      .eq('restaurant_legacy_id', String(restaurantId));
-    throwIfError(error);
-    return fetchDineMatchGroupFromDb(groupId);
+  const group = await fetchDineMatchGroupFromDb(groupId);
+  if (!group) return null;
+  const votes = (group.votes || []).filter((vote) => !(String(vote.userId) === String(user.id) && String(vote.restaurantId) === String(restaurantId)));
+  if (value === 1 || value === -1) {
+    votes.push({ id: `vote-${user.id}-${restaurantId}`, userId: user.id, restaurantId: String(restaurantId), value, updatedAt: nowIso() });
   }
-  const { error } = await client.from('dine_match_votes').upsert({
-    group_id: groupId,
-    user_id: user.id,
-    restaurant_legacy_id: String(restaurantId),
-    value,
-    updated_at: nowIso()
-  }, { onConflict: 'group_id,user_id,restaurant_legacy_id' });
-  throwIfError(error);
-  return fetchDineMatchGroupFromDb(groupId);
+  const nextGroup = { ...group, votes };
+  await upsertListItem(storageKeys.dineMatchGroups, nextGroup);
+  return nextGroup;
 }
 
 export async function finishDineMatchGroupInDb(groupId, winnerRestaurantId, user) {
   assertSignedIn(user);
-  if (!supabaseAuthEnabled) return null;
-  const client = requireClient();
-  const { error } = await client.from('dine_match_groups').update({
-    status: 'finished',
-    winner_restaurant_legacy_id: String(winnerRestaurantId || ''),
-    updated_at: nowIso()
-  }).eq('id', groupId).eq('host_id', user.id);
-  throwIfError(error);
-  return fetchDineMatchGroupFromDb(groupId);
+  const group = await fetchDineMatchGroupFromDb(groupId);
+  if (!group || String(group.hostId) !== String(user.id)) return null;
+  const nextGroup = { ...group, status: 'finished', winnerRestaurantId: String(winnerRestaurantId || ''), updatedAt: nowIso() };
+  await upsertListItem(storageKeys.dineMatchGroups, nextGroup);
+  return nextGroup;
 }
 
 export async function deleteUserAccountInDb(user) {
-  const client = requireClient();
-  if (!client || !user?.id) return;
+  if (!user?.id) return;
   const userId = String(user.id);
-  const results = await Promise.all([
-    client.from('app_favorites').delete().eq('user_legacy_id', userId),
-    client.from('feed_posts').update({ status: 'deleted', updated_at: nowIso() }).eq('author_legacy_id', userId),
-    client.from('feed_comments').update({ status: 'deleted', updated_at: nowIso() }).eq('author_legacy_id', userId),
-    client.from('feed_reactions').delete().eq('user_legacy_id', userId),
-    client.from('social_follows').delete().or(`follower_legacy_id.eq.${userId},target_legacy_id.eq.${userId}`),
-    client.from('app_notifications').delete().or(`user_legacy_id.eq.${userId},actor_legacy_id.eq.${userId}`),
-    client.from('user_blocks').delete().eq('user_legacy_id', userId),
-    client.from('push_tokens').delete().eq('user_legacy_id', userId),
-    client.from('invites').update({ status: 'deleted', updated_at: nowIso() }).eq('owner_legacy_id', userId),
-    client.from('app_reservations').delete().eq('user_legacy_id', userId),
-    client.from('app_waitlist_entries').delete().eq('user_legacy_id', userId),
-    client.from('app_profiles').delete().eq('legacy_id', userId)
+  await Promise.all([
+    writeList(storageKeys.users, []),
+    AsyncStorage.removeItem(storageKeys.currentUser),
+    AsyncStorage.removeItem(`${storageKeys.favorites}:${userId}`)
   ]);
-  results.forEach(({ error }) => throwIfError(error));
+  const [posts, reactions, follows, notifications, blocks, reservations, waitlist, profiles] = await Promise.all([
+    readList(storageKeys.feedPosts),
+    readJson(storageKeys.feedReactions, {}),
+    readList(storageKeys.follows),
+    readList(storageKeys.notifications),
+    readList(storageKeys.blocks),
+    readList(storageKeys.reservations),
+    readList(storageKeys.waitlist),
+    readList(storageKeys.profiles)
+  ]);
+  await Promise.all([
+    writeList(storageKeys.feedPosts, posts.filter((post) => String(post.authorId || post.userId) !== userId)),
+    writeJson(storageKeys.feedReactions, Object.fromEntries(Object.entries(reactions).filter(([, value]) => value?.userId !== userId))),
+    writeList(storageKeys.follows, follows.filter((item) => String(item.followerId) !== userId && String(item.targetId) !== userId)),
+    writeList(storageKeys.notifications, notifications.filter((item) => String(item.userId) !== userId && String(item.actorId) !== userId)),
+    writeList(storageKeys.blocks, blocks.filter((item) => String(item.userId) !== userId)),
+    writeList(storageKeys.reservations, reservations.filter((item) => String(item.userId) !== userId)),
+    writeList(storageKeys.waitlist, waitlist.filter((item) => String(item.userId) !== userId)),
+    writeList(storageKeys.profiles, profiles.filter((item) => String(item.id) !== userId))
+  ]);
 }

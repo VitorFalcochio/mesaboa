@@ -2308,7 +2308,7 @@ export default function App() {
           }
         }
       } catch (error) {
-        Alert.alert('Supabase', 'Não foi possível sincronizar agora. O app vai continuar usando os dados locais.');
+        Alert.alert('Armazenamento local', 'Não foi possível carregar todos os dados salvos neste navegador agora.');
       } finally {
         setHydrated(true);
       }
@@ -2329,6 +2329,7 @@ export default function App() {
 
   useEffect(() => {
     if (!hydrated) return;
+    if (supabaseAuthEnabled) return;
     AsyncStorage.setItem(storageKeys.users, JSON.stringify(users));
   }, [hydrated, users]);
 
@@ -2936,7 +2937,7 @@ export default function App() {
             setCustomFeedPosts((items) => items.filter((item) => item.id !== post.id));
             setSelectedFeedPost(null);
             deleteFeedPostInDb(post.id, currentUser).catch(() => {
-              Alert.alert('Publicacao removida', 'Ela saiu deste aparelho, mas a remocao no servidor precisa ser tentada novamente.');
+              Alert.alert('Publicacao removida', 'Ela saiu deste aparelho, mas a remocao local precisa ser tentada novamente.');
             });
           }
         }
@@ -3463,7 +3464,7 @@ export default function App() {
             try {
               await deleteUserAccountInDb(currentUser);
             } catch (error) {
-              Alert.alert('Exclusao solicitada', 'Nao conseguimos apagar tudo no servidor agora, mas removemos a conta deste aparelho. Fale com suporte para concluir a exclusao remota.');
+              Alert.alert('Exclusao local', 'Nao conseguimos apagar tudo agora, mas removemos a conta deste aparelho.');
             }
             const nextUsers = users.filter((user) => user.id !== userId && normalize(user.email) !== normalize(userEmail));
             setUsers(nextUsers);
@@ -3628,7 +3629,7 @@ export default function App() {
     const confirmPassword = String(form.confirmPassword || '');
     const storedUser = users.find((user) => user.id === currentUser.id || normalize(user.email) === normalize(currentUser.email));
     if (!storedUser?.password) {
-      Alert.alert('Senha', 'Esta conta ainda nao tem senha local salva. Ao conectar Supabase Auth, use recuperacao por email.');
+      Alert.alert('Senha', 'Esta conta ainda nao tem senha local salva neste navegador.');
       return;
     }
     if (storedUser.password !== currentPassword) {
@@ -3864,7 +3865,7 @@ export default function App() {
     try {
       await signOutFromSupabase();
     } catch (error) {
-      Alert.alert('Sessão', 'A sessão foi removida deste aparelho, mas não foi possível avisar o servidor agora.');
+      Alert.alert('Sessão', 'A sessão foi removida deste navegador.');
     }
     setCurrentUser(null);
     await AsyncStorage.removeItem(storageKeys.currentUser);
@@ -3936,7 +3937,13 @@ export default function App() {
         if (!hadPendingAction) openAccountHome(user, authMode === 'signup');
       } catch (error) {
         if (error?.message === 'EMAIL_CONFIRMATION_REQUIRED') {
-          setAuthError('Desative “Confirm email” no Supabase para entrar sem confirmação por e-mail.');
+          setAuthError('A conta local deste navegador já existe. Use Entrar para continuar.');
+        } else if (error?.message === 'BROWSER_ACCOUNT_EXISTS') {
+          setAuthError('Este navegador já tem uma conta Dine. Entre nela ou exclua a conta atual nas configurações.');
+        } else if (error?.message === 'LOCAL_ACCOUNT_NOT_FOUND') {
+          setAuthError('Nenhuma conta foi criada neste navegador ainda.');
+        } else if (error?.message === 'INVALID_LOCAL_CREDENTIALS') {
+          setAuthError('E-mail ou senha inválidos para a conta deste navegador.');
         } else if (/invalid login credentials/i.test(error?.message || '')) {
           setAuthError('E-mail ou senha inválidos.');
         } else if (/already registered|already been registered/i.test(error?.message || '')) {
@@ -4121,7 +4128,7 @@ export default function App() {
     });
     const saveAction = form.id ? updateRestaurantInDb(item.id, item, currentUser, editingRestaurant || item) : createRestaurantInDb(item, currentUser);
     saveAction.catch(() => {
-      Alert.alert('Supabase', 'O restaurante ficou salvo no aparelho, mas não sincronizou com o banco agora.');
+      Alert.alert('Armazenamento local', 'O restaurante ficou salvo no aparelho, mas não foi possível atualizar o banco local agora.');
     });
     setEditingRestaurant(null);
     setForm({});
@@ -4608,7 +4615,7 @@ export default function App() {
     if (!currentUser && !requireLogin({ type: 'tab', target: 'Perfil' })) return;
     claimRestaurantInDb(item.id, currentUser).then(() => {
       Alert.alert('Reivindicação enviada', 'Um admin poderá aprovar sua solicitação.');
-    }).catch(() => Alert.alert('Supabase', 'Não foi possível enviar a reivindicação agora.'));
+    }).catch(() => Alert.alert('Armazenamento local', 'Não foi possível salvar a reivindicação agora.'));
   }
 
   function sortedReviews(restaurantId) {
@@ -4650,7 +4657,7 @@ export default function App() {
     )));
     awardPoints('review', item.id, pointRewards.review, item.name);
     setReviewDraft({ rating: '5', comment: '' });
-    saveReviewToDb(review).catch(() => Alert.alert('Supabase', 'Comentário salvo localmente, mas não sincronizou agora.'));
+    saveReviewToDb(review).catch(() => Alert.alert('Armazenamento local', 'Comentário criado na tela, mas não foi possível salvar no navegador agora.'));
     updateRestaurantInDb(item.id, { rating: Number(nextRating.toFixed(1)), reviews: nextReviews.length }).catch(() => {});
   }
 
@@ -4931,7 +4938,7 @@ function postKey(restaurantId, postId) {
         : createLocalDineMatchGroup({ user: currentUser, preferences: dineMatchDraft, restaurantIds: ranked.map((item) => item.id) });
       syncDineMatchGroup(group);
     } catch (error) {
-      setDineMatchFeedback('Não conseguimos criar o grupo agora. Confirme se a migration do Dine Match foi aplicada no Supabase.');
+      setDineMatchFeedback('Não conseguimos criar o grupo local agora. Tente novamente neste navegador.');
     } finally {
       setDineMatchBusy(false);
     }
@@ -5493,7 +5500,7 @@ function postKey(restaurantId, postId) {
         }
         return;
       } catch (error) {
-        Alert.alert('Supabase', 'Não foi possível concluir a análise. Nenhum acesso foi alterado.');
+        Alert.alert('Armazenamento local', 'Não foi possível concluir a análise. Nenhum acesso foi alterado.');
         return;
       }
     }
@@ -7239,7 +7246,7 @@ function postKey(restaurantId, postId) {
           <Text style={styles.panelTitle}>Conta</Text>
           <Text style={styles.panelText}>Email: {currentUser?.email || 'sem login'}</Text>
           <Text style={styles.panelText}>Tipo de acesso: {isAdmin ? 'Administrador' : isRestaurantOwner ? 'Dono de restaurante' : currentUser ? 'Usuário' : 'Visitante'}</Text>
-          <Text style={styles.panelText}>Sincronizacao: {supabaseReady ? 'Supabase ativo' : 'Modo local'}</Text>
+          <Text style={styles.panelText}>Banco de dados: localStorage deste navegador</Text>
           <Text style={styles.panelText}>Senha: {passwordUpdatedAt}</Text>
         </View>
         <View style={styles.pagePanel}>
@@ -7269,7 +7276,7 @@ function postKey(restaurantId, postId) {
           <Text style={styles.panelText}>Plataforma: {Platform.OS}</Text>
           <Text style={styles.panelText}>Conta: {currentUser?.email || 'sem login'}</Text>
           <Text style={styles.panelText}>Inicio: {sessionLabel}</Text>
-          <Text style={styles.panelText}>Tipo: {supabaseReady ? 'Sincronizado com Supabase' : 'Sessao local no aparelho'}</Text>
+          <Text style={styles.panelText}>Tipo: Conta unica neste navegador</Text>
         </View>
         <View style={styles.settingsList}>
           <SettingsActionRow icon="shield-checkmark-outline" title="Atualizar verificacao" subtitle="Registrar nova checagem de seguranca local" onPress={() => updateCurrentUserProfile({ security: { ...(currentUser?.security || {}), lastSessionCheckAt: new Date().toISOString(), platform: Platform.OS } })} />
